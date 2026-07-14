@@ -316,10 +316,12 @@ CREATE TRIGGER on_auth_user_created
 -- ---------------------------------------------------------------------------
 -- org_id is the tenant key and the RLS predicate. user_id is kept only as an
 -- audit stamp: which member last wrote the row.
+-- user_id is ON DELETE SET NULL, not CASCADE: removing a member deletes their
+-- account, and the organization's catalogue must not go with them.
 CREATE TABLE IF NOT EXISTS public.products (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id          UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   name            TEXT NOT NULL,
   sku             TEXT NOT NULL,
   image_url       TEXT,
@@ -392,7 +394,7 @@ CREATE TABLE IF NOT EXISTS public.stock_items (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id         UUID REFERENCES public.products(id) ON DELETE SET NULL,
   org_id             UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-  user_id            UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id            UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   product_name       TEXT,
   product_sku        TEXT,
   product_image_url  TEXT,
@@ -460,7 +462,9 @@ CREATE TABLE IF NOT EXISTS public.sales (
   product_id         UUID REFERENCES public.products(id) ON DELETE SET NULL,
   stock_item_id      UUID REFERENCES public.stock_items(id) ON DELETE SET NULL,
   org_id             UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-  user_id            UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: removing a member deletes their account, and a sale
+  -- must outlive the person who rang it up.
+  user_id            UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   product_name       TEXT,
   product_sku        TEXT,
   product_image_url  TEXT,
@@ -698,8 +702,13 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.org_remove_member(p_member_id UUID)
-RETURNS VOID
+-- Returns the removed member's auth user id so the server can then delete the
+-- account through the admin Auth API (a membership-less account is useless and
+-- would block re-inviting that email). NULL for a never-claimed invite.
+DROP FUNCTION IF EXISTS public.org_remove_member(UUID);
+
+CREATE FUNCTION public.org_remove_member(p_member_id UUID)
+RETURNS UUID
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
@@ -728,11 +737,13 @@ BEGIN
     PERFORM public.assert_org_keeps_an_admin(v_org_id, p_member_id);
   END IF;
 
-  -- Only the membership goes. The auth user, and every sale they recorded,
-  -- survive — their current_org_id() simply becomes NULL, and RLS stops handing
-  -- them this org's rows on their next request.
+  -- The sales they recorded and the products they added survive: those FKs are
+  -- ON DELETE SET NULL, so only the attribution goes. The account itself is then
+  -- deleted by the caller (see removeMember in src/lib/org.functions.ts).
   DELETE FROM public.organization_members
   WHERE id = p_member_id AND org_id = v_org_id;
+
+  RETURN v_user;
 END;
 $$;
 

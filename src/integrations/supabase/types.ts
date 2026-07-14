@@ -88,7 +88,9 @@ export type Database = {
           sku: string
           stock: number
           updated_at: string
-          user_id: string
+          // Audit stamp only — goes NULL if the member who created it is
+          // removed. org_id is the tenant key.
+          user_id: string | null
         }
         Insert: {
           category?: string
@@ -105,7 +107,7 @@ export type Database = {
           sku: string
           stock?: number
           updated_at?: string
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           category?: string
@@ -122,7 +124,7 @@ export type Database = {
           sku?: string
           stock?: number
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -310,7 +312,9 @@ export type Database = {
       }
       org_remove_member: {
         Args: { p_member_id: string }
-        Returns: undefined
+        // The removed member's auth user id, so the caller can delete the
+        // account. NULL for a never-claimed invite.
+        Returns: string | null
       }
     }
     Enums: {

@@ -276,8 +276,9 @@ function TeamPage() {
             <span className="font-medium text-foreground">
               {removing?.display_name ?? removing?.email}
             </span>{" "}
-            will immediately lose access to this organization's inventory, sales and payments.
-            Their account is not deleted, and the sales they recorded stay in your history.
+            will lose access immediately, and their login account will be deleted — they won't be
+            able to sign in again unless you re-invite them. The sales they recorded and any
+            products they added stay in your history. This cannot be undone.
           </>
         }
         confirmText="Remove"

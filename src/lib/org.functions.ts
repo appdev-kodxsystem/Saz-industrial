@@ -223,17 +223,47 @@ export const updateMemberRole = createServerFn({ method: "POST" })
   });
 
 /**
- * Remove someone from the org. Their auth account and the sales they recorded
- * both survive; only the membership goes, which is what revokes their access.
- * The database refuses to remove the last admin, or the caller themselves.
+ * Remove someone from the org AND delete their account.
+ *
+ * A user belongs to exactly one organization, so a membership-less account is
+ * good for nothing except squatting on an email address — which would block
+ * ever re-inviting that person, since Supabase won't invite an address that
+ * already has an account. So the account goes too.
+ *
+ * What does NOT go: the org's history. products/stock_items/sales.user_id are
+ * ON DELETE SET NULL (see the 20260716 migration), so every sale the person rang
+ * up and every product they added stays exactly where it is — it belongs to the
+ * organization, not to them. Only the attribution goes null.
+ *
+ * The database enforces the guards (admin only, not yourself, never the last
+ * admin) and hands back the auth user id; deleting the account itself needs the
+ * admin Auth API, which is the one thing the service-role key is for.
  */
 export const removeMember = createServerFn({ method: "POST" })
   .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) => z.object({ memberId: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
-    const { error } = await context.supabase.rpc("org_remove_member", {
+    const { data: removedUserId, error } = await context.supabase.rpc("org_remove_member", {
       p_member_id: data.memberId,
     });
     if (error) throw new Error(error.message);
-    return { ok: true };
+
+    // NULL means the row was a never-claimed invite — there is no account to
+    // delete, and removing the membership row was the whole job.
+    if (!removedUserId) return { ok: true, accountDeleted: false };
+
+    const { error: deleteErr } = await supabaseAdmin.auth.admin.deleteUser(
+      removedUserId as string,
+    );
+    if (deleteErr) {
+      // The membership is already gone, so they have lost access either way —
+      // that is the part that matters and it is done. Only the account cleanup
+      // failed, so say so plainly rather than implying nothing happened.
+      throw new Error(
+        `Removed from the team, but their login account could not be deleted: ${deleteErr.message}. ` +
+          `Delete it manually under Authentication > Users if you need to re-invite this email.`,
+      );
+    }
+
+    return { ok: true, accountDeleted: true };
   });

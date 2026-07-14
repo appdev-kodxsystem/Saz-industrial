@@ -16,7 +16,9 @@ type SaleRow = Tables<"sales">;
 export interface ProductRow {
   id: string;
   org_id: string;
-  user_id: string;
+  // Audit stamp: which member last wrote the row. Goes NULL if that person is
+  // removed from the org — the product belongs to the organization, not them.
+  user_id: string | null;
   name: string;
   sku: string;
   image_url: string | null;
