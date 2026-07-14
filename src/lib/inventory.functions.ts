@@ -1,13 +1,21 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { requireOrgAdmin, requireOrgMember } from "@/integrations/supabase/org-middleware";
 import type { Tables } from "@/integrations/supabase/types";
 
 type StockItemRow = Tables<"stock_items">;
 type SaleRow = Tables<"sales">;
 
+// Which middleware a handler carries IS its permission model:
+//   requireOrgMember — admins and employees. Reads, and the sell path.
+//   requireOrgAdmin  — admins only. Anything that creates, edits or deletes a
+//                      product or a stock unit.
+// RLS enforces the same split independently (see the organizations migration),
+// so a mistake here is caught by the database rather than becoming a hole.
+
 export interface ProductRow {
   id: string;
+  org_id: string;
   user_id: string;
   name: string;
   sku: string;
@@ -38,7 +46,7 @@ const productInput = z.object({
 });
 
 export const listProducts = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .handler(async ({ context }) => {
     const { data, error } = await context.supabase
       .from("products")
@@ -46,19 +54,30 @@ export const listProducts = createServerFn({ method: "GET" })
       .order("pinned", { ascending: false })
       .order("updated_at", { ascending: false });
     if (error) throw new Error(error.message);
-    return (data ?? []) as unknown as ProductRow[];
+    const rows = (data ?? []) as unknown as ProductRow[];
+    // Employees see the catalogue to sell from it, but not purchase cost — the
+    // margin block in ProductDrawer is gated on this too. Blank it out of the
+    // payload rather than trusting the UI alone.
+    if (context.role !== "admin") {
+      return rows.map((r) => ({ ...r, purchase_price: 0 }));
+    }
+    return rows;
   });
 
 export const upsertProduct = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((data: unknown) => productInput.parse(data))
   .handler(async ({ context, data }) => {
-    const payload = { ...data, user_id: context.userId };
+    // org_id is the tenant key; user_id records which admin last wrote the row.
+    // The update path is additionally pinned to the caller's org so a guessed id
+    // from another tenant matches nothing.
+    const payload = { ...data, org_id: context.orgId, user_id: context.userId };
     const { data: row, error } = data.id
       ? await context.supabase
           .from("products")
           .update(payload)
           .eq("id", data.id)
+          .eq("org_id", context.orgId)
           .select()
           .single()
       : await context.supabase.from("products").insert(payload).select().single();
@@ -67,30 +86,24 @@ export const upsertProduct = createServerFn({ method: "POST" })
   });
 
 export const adjustStock = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) =>
     z.object({ id: z.string().uuid(), delta: z.number().int().min(-10000).max(10000) }).parse(d),
   )
   .handler(async ({ context, data }) => {
-    const { data: current, error: e1 } = await context.supabase
-      .from("products")
-      .select("stock")
-      .eq("id", data.id)
-      .single();
-    if (e1) throw new Error(e1.message);
-    const next = Math.max(0, ((current?.stock as number) ?? 0) + data.delta);
+    await applyStockDelta(context.supabase, data.id, data.delta);
     const { data: row, error } = await context.supabase
       .from("products")
-      .update({ stock: next })
+      .select("*")
       .eq("id", data.id)
-      .select()
+      .eq("org_id", context.orgId)
       .single();
     if (error) throw new Error(error.message);
     return row as unknown as ProductRow;
   });
 
 export const togglePin = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) =>
     z.object({ id: z.string().uuid(), pinned: z.boolean() }).parse(d),
   )
@@ -98,22 +111,25 @@ export const togglePin = createServerFn({ method: "POST" })
     const { error } = await context.supabase
       .from("products")
       .update({ pinned: data.pinned })
-      .eq("id", data.id);
+      .eq("id", data.id)
+      .eq("org_id", context.orgId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
 
 export const duplicateProduct = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
     const { data: src, error: e1 } = await context.supabase
       .from("products")
       .select("*")
       .eq("id", data.id)
+      .eq("org_id", context.orgId)
       .single<ProductRow>();
     if (e1 || !src) throw new Error(e1?.message ?? "Not found");
     const copy = {
+      org_id: context.orgId,
       user_id: context.userId,
       name: `${src.name} (copy)`,
       sku: `${src.sku}-C`,
@@ -136,10 +152,14 @@ export const duplicateProduct = createServerFn({ method: "POST" })
   });
 
 export const deleteProduct = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
-    const { error } = await context.supabase.from("products").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("products")
+      .delete()
+      .eq("id", data.id)
+      .eq("org_id", context.orgId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -178,9 +198,15 @@ const DEMO = [
 ];
 
 export const seedDemoProducts = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .handler(async ({ context }) => {
-    const rows = DEMO.map((p) => ({ ...p, user_id: context.userId, image_url: null, pinned: false }));
+    const rows = DEMO.map((p) => ({
+      ...p,
+      org_id: context.orgId,
+      user_id: context.userId,
+      image_url: null,
+      pinned: false,
+    }));
     const { error } = await context.supabase.from("products").insert(rows);
     if (error) throw new Error(error.message);
     return { inserted: rows.length };
@@ -204,13 +230,14 @@ function missingTableMessage(err: unknown, withOriginal = false): string | null 
 const stockEntry = z.object({ manufacture_id: z.string().min(1).max(200), purchase_price: z.number().min(0).max(1_000_000) });
 
 export const addStockEntries = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) => z.object({ productId: z.string().uuid(), entries: z.array(stockEntry).min(1) }).parse(d))
   .handler(async ({ context, data }) => {
-    // snapshot product info + user_id so purchase history survives product deletion
+    // snapshot product info + org_id so purchase history survives product deletion
     const snap = await fetchProductSnapshot(context.supabase, data.productId);
     const rows = data.entries.map((e) => ({
       product_id: data.productId,
+      org_id: context.orgId,
       user_id: context.userId,
       product_name: snap.name,
       product_sku: snap.sku,
@@ -228,26 +255,12 @@ export const addStockEntries = createServerFn({ method: "POST" })
       if (hint) throw new Error(hint);
       throw new Error(err?.message || String(err));
     }
-    // increment product stock by reading current value then updating
-    const { data: currentProd, error: e2 } = await context.supabase
-      .from("products")
-      .select("stock")
-      .eq("id", data.productId)
-      .single();
-    if (e2) throw new Error(e2.message);
-    const nextStock = Math.max(0, ((currentProd?.stock as number) ?? 0) + rows.length);
-    const { data: prod, error: e3 } = await context.supabase
-      .from("products")
-      .update({ stock: nextStock })
-      .eq("id", data.productId)
-      .select()
-      .single();
-    if (e3) throw new Error(e3.message);
+    await applyStockDelta(context.supabase, data.productId, rows.length);
     return { inserted: inserted ?? [] };
   });
 
 export const peekNextStockItem = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object({ productId: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
     const { data: item, error } = await context.supabase
@@ -276,6 +289,7 @@ const salePaymentInput = {
 function buildSaleRow(opts: {
   product_id: string;
   stock_item_id: string | null;
+  org_id: string;
   user_id: string;
   product_name: string | null;
   product_sku: string | null;
@@ -290,7 +304,9 @@ function buildSaleRow(opts: {
   return {
     product_id: opts.product_id,
     stock_item_id: opts.stock_item_id,
-    // snapshot so the sale + any pending payment survive product deletion
+    // snapshot so the sale + any pending payment survive product deletion.
+    // org_id owns the row; user_id records which member rang up the sale.
+    org_id: opts.org_id,
     user_id: opts.user_id,
     product_name: opts.product_name,
     product_sku: opts.product_sku,
@@ -301,6 +317,25 @@ function buildSaleRow(opts: {
     customer_name: opts.customer_name ?? null,
     customer_contact: opts.customer_contact ?? null,
   };
+}
+
+// Move products.stock by `delta`, clamped at zero, and return the new value.
+//
+// Two reasons this is an RPC rather than a read-then-update:
+//
+//   1. Permissions. Selling decrements stock, and employees sell — but they have
+//      no UPDATE on products (that is what stops them editing names and prices).
+//      apply_stock_delta is SECURITY DEFINER and can touch nothing but `stock`,
+//      on a product in the caller's own org.
+//   2. Atomicity. `SET stock = stock + delta` in one statement cannot lose an
+//      update the way SELECT-then-UPDATE could when two sales land together.
+async function applyStockDelta(supabase: any, productId: string, delta: number): Promise<number> {
+  const { data, error } = await supabase.rpc("apply_stock_delta", {
+    p_product_id: productId,
+    p_delta: delta,
+  });
+  if (error) throw new Error(error.message);
+  return (data as number) ?? 0;
 }
 
 // Fetch the product fields snapshotted onto a sale. Returns nulls if absent.
@@ -321,7 +356,7 @@ async function fetchProductSnapshot(
 }
 
 export const sellOneFromStock = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object({ productId: z.string().uuid(), ...salePaymentInput }).parse(d))
   .handler(async ({ context, data }) => {
     // find next stock item
@@ -366,6 +401,7 @@ export const sellOneFromStock = createServerFn({ method: "POST" })
     const saleRow = buildSaleRow({
       product_id: data.productId,
       stock_item_id: next.id,
+      org_id: context.orgId,
       user_id: context.userId,
       product_name: snap.name,
       product_sku: snap.sku,
@@ -386,21 +422,7 @@ export const sellOneFromStock = createServerFn({ method: "POST" })
       throw err;
     }
 
-    // decrement product stock by reading current value then updating
-    const { data: currentProd, error: e4 } = await context.supabase
-      .from("products")
-      .select("stock")
-      .eq("id", data.productId)
-      .single();
-    if (e4) throw new Error(e4.message);
-    const nextStockDec = Math.max(0, ((currentProd?.stock as number) ?? 0) - 1);
-    const { data: prod, error: e5 } = await context.supabase
-      .from("products")
-      .update({ stock: nextStockDec })
-      .eq("id", data.productId)
-      .select()
-      .single();
-    if (e5) throw new Error(e5.message);
+    await applyStockDelta(context.supabase, data.productId, -1);
 
     return { sale, stock_item: updated };
   });
@@ -429,8 +451,10 @@ export interface LedgerEntry {
 
 // Unified activity ledger. Stock-in/purchase rows come from stock_items,
 // stock-out/sale rows from sales. Each row carries its product name + sku.
+// Admin-only: it exposes per-unit cost and profit, and it backs the printable
+// report, which is an admin surface.
 export const getLedger = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .handler(async ({ context }): Promise<LedgerEntry[]> => {
     type StockItemSel = Pick<
       StockItemRow,
@@ -463,11 +487,11 @@ export const getLedger = createServerFn({ method: "GET" })
       context.supabase
         .from("stock_items")
         .select("id, product_id, user_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at")
-        .eq("user_id", context.userId),
+        .eq("org_id", context.orgId),
       context.supabase
         .from("sales")
         .select("id, product_id, user_id, product_name, product_sku, stock_item_id, selling_price, created_at")
-        .eq("user_id", context.userId),
+        .eq("org_id", context.orgId),
     ]);
 
     if (prodRes.error) throw new Error(prodRes.error.message);
@@ -476,12 +500,11 @@ export const getLedger = createServerFn({ method: "GET" })
 
     const entries: LedgerEntry[] = [];
 
-    // A row belongs to the user if its product is one of theirs (original
-    // scoping, works even when user_id was never backfilled), OR — once the
-    // product is deleted (product_id null) — if the snapshot user_id matches.
-    const ownsRow = (productId: string | null, userId: string | null) =>
-      (productId != null && prodById.has(productId)) ||
-      (productId == null && userId === context.userId);
+    // No ownership filter here any more. The queries above are already pinned to
+    // context.orgId, and RLS pins them again — so every row that comes back is
+    // the org's by construction. The old check compared each row's user_id to the
+    // caller's, which under org scoping would hide a teammate's purchases and
+    // sales from the shared ledger.
 
     // Stock-in / purchases
     let stockItems: StockItemSel[] = [];
@@ -490,7 +513,7 @@ export const getLedger = createServerFn({ method: "GET" })
         throw new Error(stockRes.error.message);
       }
     } else {
-      stockItems = ((stockRes.data ?? []) as StockItemSel[]).filter((it) => ownsRow(it.product_id, it.user_id));
+      stockItems = (stockRes.data ?? []) as StockItemSel[];
     }
     for (const it of stockItems) {
       const p = it.product_id ? prodById.get(it.product_id) : undefined;
@@ -520,7 +543,7 @@ export const getLedger = createServerFn({ method: "GET" })
         throw new Error(salesRes.error.message);
       }
     } else {
-      sales = ((salesRes.data ?? []) as SaleLedgerSel[]).filter((s) => ownsRow(s.product_id, s.user_id));
+      sales = (salesRes.data ?? []) as SaleLedgerSel[];
     }
     for (const s of sales) {
       const p = s.product_id ? prodById.get(s.product_id) : undefined;
@@ -547,19 +570,20 @@ export const getLedger = createServerFn({ method: "GET" })
     return entries;
   });
 
-// Returns every sale for the user joined with its stock item's purchase price,
-// so the client can bucket profit/revenue by week/month/year.
+// Returns every sale joined with its stock item's purchase price, so the client
+// can bucket profit/revenue by week/month/year. Admin-only: it is nothing but
+// cost and profit, and it backs the admin Reports page.
 export const getProfitSeries = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .handler(async ({ context }): Promise<ProfitSaleRow[]> => {
     // sales + cost map are independent — fetch in parallel (one round trip)
     const [salesRes, costRes] = await Promise.all([
       context.supabase
         .from("sales")
         .select("selling_price, created_at, stock_item_id")
-        .eq("user_id", context.userId)
+        .eq("org_id", context.orgId)
         .order("created_at", { ascending: true }),
-      context.supabase.from("stock_items").select("id, purchase_price").eq("user_id", context.userId),
+      context.supabase.from("stock_items").select("id, purchase_price").eq("org_id", context.orgId),
     ]);
 
     let sales: { selling_price: number; created_at: string; stock_item_id: string | null }[] = [];
@@ -583,7 +607,7 @@ export const getProfitSeries = createServerFn({ method: "GET" })
   });
 
 export const getAvailableStockItems = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object({ productId: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
     try {
@@ -594,7 +618,12 @@ export const getAvailableStockItems = createServerFn({ method: "GET" })
         .eq("sold", false)
         .order("created_at", { ascending: true });
       if (error) throw error;
-      return items ?? [];
+      const rows = items ?? [];
+      // Employees add units to the cart from here but must not see unit cost.
+      if (context.role !== "admin") {
+        return rows.map((it) => ({ ...it, purchase_price: 0 }));
+      }
+      return rows;
     } catch (err: any) {
       const hint = missingTableMessage(err, true);
       if (hint) throw new Error(hint);
@@ -603,7 +632,7 @@ export const getAvailableStockItems = createServerFn({ method: "GET" })
   });
 
 export const sellStockItem = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object({ stockItemId: z.string().uuid(), ...salePaymentInput }).parse(d))
   .handler(async ({ context, data }) => {
     // mark item sold
@@ -633,6 +662,7 @@ export const sellStockItem = createServerFn({ method: "POST" })
       const saleRow = buildSaleRow({
         product_id: productId,
         stock_item_id: item.id,
+        org_id: context.orgId,
         user_id: context.userId,
         product_name: snap.name,
         product_sku: snap.sku,
@@ -646,21 +676,7 @@ export const sellStockItem = createServerFn({ method: "POST" })
       if (res3.error) throw res3.error;
       const sale = res3.data;
 
-      // decrement product stock by reading current value then updating
-      const { data: currentProd, error: e4 } = await context.supabase
-        .from("products")
-        .select("stock")
-        .eq("id", productId)
-        .single();
-      if (e4) throw new Error(e4.message);
-      const nextStock = Math.max(0, ((currentProd?.stock as number) ?? 0) - 1);
-      const { data: prod, error: e5 } = await context.supabase
-        .from("products")
-        .update({ stock: nextStock })
-        .eq("id", productId)
-        .select()
-        .single();
-      if (e5) throw new Error(e5.message);
+      await applyStockDelta(context.supabase, productId, -1);
 
       return { sale, stock_item: updated };
     } catch (err: any) {
@@ -676,7 +692,7 @@ export const sellStockItem = createServerFn({ method: "POST" })
 // insert, then one stock decrement per distinct product. Customer + payment are
 // captured per-cart (shared customer) with per-unit selling/net amounts.
 export const sellStockItems = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) =>
     z
       .object({
@@ -742,6 +758,7 @@ export const sellStockItems = createServerFn({ method: "POST" })
         return buildSaleRow({
           product_id: it.product_id as string,
           stock_item_id: it.id,
+          org_id: context.orgId,
           user_id: context.userId,
           product_name: snap?.name ?? it.product_name ?? null,
           product_sku: snap?.sku ?? it.product_sku ?? null,
@@ -762,17 +779,9 @@ export const sellStockItems = createServerFn({ method: "POST" })
         const pid = it.product_id as string;
         soldPerProduct.set(pid, (soldPerProduct.get(pid) ?? 0) + 1);
       }
-      const stockUpdates = await Promise.all(
-        [...soldPerProduct].map(([pid, n]) => {
-          const current = (prodById.get(pid)?.stock as number) ?? 0;
-          return context.supabase
-            .from("products")
-            .update({ stock: Math.max(0, current - n) })
-            .eq("id", pid);
-        }),
+      await Promise.all(
+        [...soldPerProduct].map(([pid, n]) => applyStockDelta(context.supabase, pid, -n)),
       );
-      const stockErr = stockUpdates.find((r) => r.error);
-      if (stockErr?.error) throw new Error(stockErr.error.message);
 
       return { sold: ids.length, sales: salesRes.data ?? [] };
     } catch (err: any) {
@@ -829,7 +838,7 @@ export interface PagedPending {
 // name/sku/image come from the live product when it still exists, otherwise from
 // the snapshot stored on the sale — deleting a product never drops a pending row.
 export const listPendingPayments = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object(pageInput).parse(d))
   .handler(async ({ context, data }): Promise<PagedPending> => {
     const { page, pageSize, search } = data;
@@ -859,7 +868,7 @@ export const listPendingPayments = createServerFn({ method: "GET" })
         "id, product_id, product_name, product_sku, product_image_url, selling_price, net_payment, pending_payment, payment_status, customer_name, customer_contact, created_at",
         { count: "exact" },
       )
-      .eq("user_id", context.userId)
+      .eq("org_id", context.orgId)
       .gt("pending_payment", 0);
     if (or) pq = pq.or(or);
     pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
@@ -867,7 +876,7 @@ export const listPendingPayments = createServerFn({ method: "GET" })
     let aq = context.supabase
       .from("sales")
       .select("net_payment, pending_payment")
-      .eq("user_id", context.userId)
+      .eq("org_id", context.orgId)
       .gt("pending_payment", 0);
     if (or) aq = aq.or(or);
 
@@ -944,7 +953,7 @@ export interface PagedLedger {
 // from the sold stock item's purchase price; live product name/sku preferred over
 // the snapshot so renames show through.
 export const listSalesPage = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object(pageInput).parse(d))
   .handler(async ({ context, data }): Promise<PagedLedger> => {
     const { page, pageSize, search, from } = data;
@@ -969,18 +978,18 @@ export const listSalesPage = createServerFn({ method: "GET" })
       .select("id, product_id, product_name, product_sku, stock_item_id, selling_price, created_at", {
         count: "exact",
       })
-      .eq("user_id", context.userId);
+      .eq("org_id", context.orgId);
     if (fromIso) pq = pq.gte("created_at", fromIso);
     if (or) pq = pq.or(or);
     pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
 
-    let aq = context.supabase.from("sales").select("selling_price, stock_item_id").eq("user_id", context.userId);
+    let aq = context.supabase.from("sales").select("selling_price, stock_item_id").eq("org_id", context.orgId);
     if (fromIso) aq = aq.gte("created_at", fromIso);
     if (or) aq = aq.or(or);
 
     const [prodRes, costRes, pageRes, aggRes] = await Promise.all([
       context.supabase.from("products").select("id, name, sku"),
-      context.supabase.from("stock_items").select("id, purchase_price").eq("user_id", context.userId),
+      context.supabase.from("stock_items").select("id, purchase_price").eq("org_id", context.orgId),
       pq,
       aq,
     ]);
@@ -1018,10 +1027,15 @@ export const listSalesPage = createServerFn({ method: "GET" })
       throw new Error(err?.message || String(err));
     }
 
+    // Employees may see the sales ledger but not cost or profit (same rule that
+    // keeps them off Purchases/Reports). Zero those fields for them here, so the
+    // numbers are absent from the network response, not merely hidden by CSS.
+    const hideCost = context.role !== "admin";
+
     const rows: LedgerEntry[] = pageRows.map((s) => {
       const live = s.product_id ? prodById.get(s.product_id) : undefined;
       const selling = Number(s.selling_price) || 0;
-      const cost = s.stock_item_id ? costById.get(s.stock_item_id) ?? 0 : 0;
+      const cost = hideCost ? 0 : s.stock_item_id ? costById.get(s.stock_item_id) ?? 0 : 0;
       return {
         id: s.id,
         kind: "sale",
@@ -1032,12 +1046,22 @@ export const listSalesPage = createServerFn({ method: "GET" })
         reference: s.stock_item_id ?? "—",
         amount: selling,
         cost,
-        profit: selling - cost,
+        profit: hideCost ? 0 : selling - cost,
         sold: true,
       };
     });
 
-    return { rows, total, stats: { count: total, revenue, profit, totalSpend: 0, stillInStock: 0 } };
+    return {
+      rows,
+      total,
+      stats: {
+        count: total,
+        revenue,
+        profit: hideCost ? 0 : profit,
+        totalSpend: 0,
+        stillInStock: 0,
+      },
+    };
   });
 
 // Full detail for a single sale, used by the Sales ledger detail drawer. Scoped by
@@ -1063,7 +1087,7 @@ export interface SaleDetail {
 }
 
 export const getSaleDetail = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) => z.object({ id: z.string().min(1) }).parse(d))
   .handler(async ({ context, data }): Promise<SaleDetail> => {
     let sale: any;
@@ -1073,7 +1097,7 @@ export const getSaleDetail = createServerFn({ method: "GET" })
         .select(
           "id, product_id, product_name, product_sku, product_image_url, stock_item_id, selling_price, net_payment, pending_payment, payment_status, customer_name, customer_contact, created_at",
         )
-        .eq("user_id", context.userId)
+        .eq("org_id", context.orgId)
         .eq("id", data.id)
         .single();
       if (res.error) throw res.error;
@@ -1105,10 +1129,12 @@ export const getSaleDetail = createServerFn({ method: "GET" })
       live = { name: prodRes.data.name, sku: prodRes.data.sku, image_url: prodRes.data.image_url ?? null };
     }
 
-    // cost + manufacture id from the sold stock unit
+    // cost + manufacture id from the sold stock unit. Withheld from employees,
+    // who are not shown cost or profit anywhere.
+    const hideCost = context.role !== "admin";
     let cost = 0;
     let manufacture_id: string | null = null;
-    if (!stockRes.error && stockRes.data) {
+    if (!hideCost && !stockRes.error && stockRes.data) {
       cost = Number(stockRes.data.purchase_price) || 0;
       manufacture_id = stockRes.data.manufacture_id ?? null;
     }
@@ -1130,15 +1156,16 @@ export const getSaleDetail = createServerFn({ method: "GET" })
       stock_item_id: sale.stock_item_id,
       manufacture_id,
       cost,
-      profit: selling - cost,
+      profit: hideCost ? 0 : selling - cost,
     };
   });
 
 // One page of purchase rows (newest first) for the Purchases ledger, plus spend +
 // in-stock totals across the whole filtered set. Sourced from stock_items, scoped
-// by user_id; live product name/sku preferred over the snapshot.
+// by org_id; live product name/sku preferred over the snapshot. Admin-only: this
+// is purchase cost, and it backs the admin Purchases page.
 export const listPurchasesPage = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) => z.object(pageInput).parse(d))
   .handler(async ({ context, data }): Promise<PagedLedger> => {
     const { page, pageSize, search, from } = data;
@@ -1164,12 +1191,12 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
       .select("id, product_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at", {
         count: "exact",
       })
-      .eq("user_id", context.userId);
+      .eq("org_id", context.orgId);
     if (fromIso) pq = pq.gte("created_at", fromIso);
     if (or) pq = pq.or(or);
     pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
 
-    let aq = context.supabase.from("stock_items").select("purchase_price, sold").eq("user_id", context.userId);
+    let aq = context.supabase.from("stock_items").select("purchase_price, sold").eq("org_id", context.orgId);
     if (fromIso) aq = aq.gte("created_at", fromIso);
     if (or) aq = aq.or(or);
 
@@ -1228,7 +1255,7 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
 // recomputes status; pending_payment is a generated column so it stays accurate.
 // Net payment is validated to never exceed the sale's selling price.
 export const settlePayment = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireOrgMember])
   .inputValidator((d: unknown) =>
     z.object({ saleId: z.string().uuid(), net_payment: z.number().min(0) }).parse(d),
   )
@@ -1240,7 +1267,7 @@ export const settlePayment = createServerFn({ method: "POST" })
         .from("sales")
         .select("id, selling_price")
         .eq("id", data.saleId)
-        .eq("user_id", context.userId)
+        .eq("org_id", context.orgId)
         .maybeSingle();
       if (res.error) throw res.error;
       sale = (res.data as { id: string; selling_price: number } | null) ?? null;
@@ -1261,7 +1288,7 @@ export const settlePayment = createServerFn({ method: "POST" })
       .from("sales")
       .update({ net_payment: data.net_payment, payment_status: status })
       .eq("id", data.saleId)
-      .eq("user_id", context.userId)
+      .eq("org_id", context.orgId)
       .select()
       .single();
     if (error) throw new Error(error.message);

@@ -24,6 +24,7 @@ function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [company, setCompany] = useState("");
   const [busy, setBusy] = useState(false);
   const [forgotError, setForgotError] = useState("");
 
@@ -71,15 +72,25 @@ function AuthPage() {
           password,
           options: {
             emailRedirectTo: `${window.location.origin}/inventory`,
-            data: { full_name: name || undefined },
+            // `company` names the organization this signup creates — the
+            // handle_new_user trigger reads it and makes the signer-up its
+            // admin. Falls back to their name if left blank.
+            data: { full_name: name || undefined, company: company || undefined },
           },
         });
         if (error) throw error;
-        toast.success("Account created. Check your email if confirmation is required.");
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        // Email confirmation is disabled, so signUp returns an active session
+        // right away. Drop it so the user lands on a clean sign-in page and logs
+        // in explicitly, rather than being taken straight into the app.
+        await supabase.auth.signOut();
+        toast.success("Account created. Please sign in.");
+        setMode("signin");
+        setPassword("");
+        return;
       }
+
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
       await router.invalidate();
       navigate({ to: "/inventory", replace: true });
     } catch (err) {
@@ -222,17 +233,32 @@ function AuthPage() {
 
               <form onSubmit={onEmailSubmit} className="flex flex-col gap-3">
                 {mode === "signup" && (
-                  <Field label="Name">
-                    <input
-                      type="text"
-                      required
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Abdullah Khan"
-                      autoComplete="name"
-                      className="w-full rounded-lg bg-surface-muted px-3 py-2.5 text-sm ring-1 ring-hairline focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                  </Field>
+                  <>
+                    <Field label="Name">
+                      <input
+                        type="text"
+                        required
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="e.g. Abdullah Khan"
+                        autoComplete="name"
+                        className="w-full rounded-lg bg-surface-muted px-3 py-2.5 text-sm ring-1 ring-hairline focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </Field>
+                    <Field label="Organization">
+                      <input
+                        type="text"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                        placeholder="e.g. SAZ Industrial"
+                        autoComplete="organization"
+                        className="w-full rounded-lg bg-surface-muted px-3 py-2.5 text-sm ring-1 ring-hairline focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <span className="text-[11px] text-muted-foreground">
+                        You'll be its admin, and can invite your team afterwards.
+                      </span>
+                    </Field>
+                  </>
                 )}
                 <Field label="Email">
                   <div className="relative">

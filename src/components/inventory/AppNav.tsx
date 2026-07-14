@@ -1,28 +1,33 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { useLayoutEffect, useRef, useState } from "react";
-import { Boxes, ShoppingCart, Truck, BarChart3, Wallet, Menu } from "lucide-react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Boxes, ShoppingCart, Truck, BarChart3, Wallet, Menu, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { UserMenu } from "@/components/inventory/UserMenu";
 import { CartButton } from "@/components/cart/CartButton";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { useOrg } from "@/hooks/use-org";
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** Admin-only destination. Employees never see the tab, and the route itself
+   *  redirects them away — see the beforeLoad guards on those routes. */
+  adminOnly?: boolean;
 }
 
 // Primary destinations, shared by the desktop tab bar and the mobile dock.
+//
+// Employees get Inventory (read-only), Sales and Pending. Purchases and Reports
+// are admin-only: both expose purchase cost and therefore profit margin.
 const NAV: NavItem[] = [
   { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/sales", label: "Sales", icon: ShoppingCart },
   { to: "/pending-payments", label: "Pending", icon: Wallet },
-  { to: "/purchases", label: "Purchases", icon: Truck },
-  { to: "/reports", label: "Reports", icon: BarChart3 },
+  { to: "/purchases", label: "Purchases", icon: Truck, adminOnly: true },
+  { to: "/reports", label: "Reports", icon: BarChart3, adminOnly: true },
+  { to: "/team", label: "Team", icon: Users, adminOnly: true },
 ];
-
-const activeIndexFor = (pathname: string) =>
-  NAV.findIndex((n) => pathname === n.to || pathname.startsWith(`${n.to}/`));
 
 /**
  * Persistent app chrome: a sticky top bar (brand + desktop tabs + account) with a
@@ -32,8 +37,17 @@ const activeIndexFor = (pathname: string) =>
  */
 export function AppNav() {
   const { pathname } = useLocation();
-  const activeIndex = activeIndexFor(pathname);
+  const { isAdmin } = useOrg();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Filter once and use this list everywhere below. The sliding pill indexes
+  // into the rendered links, so the desktop tabs, the mobile drawer and the
+  // active-index lookup all have to walk the SAME array — filtering per-render
+  // site would put the pill under the wrong tab.
+  const nav = useMemo(() => NAV.filter((n) => isAdmin || !n.adminOnly), [isAdmin]);
+  const activeIndex = nav.findIndex(
+    (n) => pathname === n.to || pathname.startsWith(`${n.to}/`),
+  );
 
   const navRef = useRef<HTMLElement>(null);
   const linkRefs = useRef<(HTMLAnchorElement | null)[]>([]);
@@ -88,7 +102,7 @@ export function AppNav() {
               className="absolute top-1 bottom-1 rounded-full bg-primary shadow-sm transition-all duration-300 ease-out"
               style={{ left: pill.left, width: pill.width, opacity: pill.show ? 1 : 0 }}
             />
-            {NAV.map((n, i) => {
+            {nav.map((n, i) => {
               const isActive = i === activeIndex;
               return (
                 <Link
@@ -134,7 +148,7 @@ export function AppNav() {
                   </SheetTitle>
                 </SheetHeader>
                 <nav className="flex flex-col gap-1 p-3">
-                  {NAV.map((n) => (
+                  {nav.map((n) => (
                     <Link
                       key={n.to}
                       to={n.to}

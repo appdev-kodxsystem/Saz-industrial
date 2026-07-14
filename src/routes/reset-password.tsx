@@ -16,6 +16,17 @@ export const Route = createFileRoute("/reset-password")({
   component: ResetPasswordPage,
 });
 
+// An invite link and a password-reset link both land here, but they are
+// different moments: one is a new teammate choosing their first password, the
+// other is an existing user recovering. Supabase marks which is which with
+// `type=invite` in the URL hash, so read it before the client consumes and
+// clears the hash.
+function isInviteLink() {
+  if (typeof window === "undefined") return false;
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return hash.get("type") === "invite";
+}
+
 function ResetPasswordPage() {
   const navigate = useNavigate();
   const [ready, setReady] = useState(false);
@@ -23,10 +34,11 @@ function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [invite] = useState(isInviteLink);
 
-  // The recovery email lands here with a token in the URL hash. The supabase
-  // client (detectSessionInUrl) exchanges it for a session and fires
-  // PASSWORD_RECOVERY. Either path means we can let the user set a new password.
+  // The email lands here with a token in the URL hash. The supabase client
+  // (detectSessionInUrl) exchanges it for a session and fires PASSWORD_RECOVERY.
+  // Either path means we can let the user set a password.
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY" || session) setReady(true);
@@ -52,7 +64,17 @@ function ResetPasswordPage() {
     try {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
-      // Force a fresh login with the new password instead of dropping
+
+      if (invite) {
+        // A new teammate just set their first password. Their membership was
+        // already activated when the invite created their account, so drop them
+        // straight into the app rather than bouncing them to a login form.
+        toast.success("Welcome aboard! Your password is set.");
+        navigate({ to: "/inventory", replace: true });
+        return;
+      }
+
+      // Recovery: force a fresh login with the new password instead of dropping
       // straight into the app on the temporary recovery session.
       await supabase.auth.signOut();
       toast.success("Password updated. Please sign in with your new password.");
@@ -68,26 +90,35 @@ function ResetPasswordPage() {
     <div className="min-h-dvh bg-background text-foreground">
       <Toaster position="top-right" />
       <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-6 py-6 sm:py-12">
-        <Link
-          to="/auth"
-          className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground sm:mb-8"
-        >
-          ← Back to sign in
-        </Link>
+        {!invite && (
+          <Link
+            to="/auth"
+            className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground sm:mb-8"
+          >
+            ← Back to sign in
+          </Link>
+        )}
         <div className="rounded-3xl bg-surface p-6 ring-1 ring-hairline shadow-xl shadow-foreground/5 sm:p-8">
-          <h1 className="text-xl font-semibold tracking-tight">Set a new password</h1>
+          <h1 className="text-xl font-semibold tracking-tight">
+            {invite ? "Set your password" : "Set a new password"}
+          </h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            Choose a new password for your account.
+            {invite
+              ? "You've been invited to SAZ Industrial. Choose a password to activate your account."
+              : "Choose a new password for your account."}
           </p>
 
           {checking ? (
             <div className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Verifying reset link…
+              <Loader2 className="size-4 animate-spin" />{" "}
+              {invite ? "Verifying invite link…" : "Verifying reset link…"}
             </div>
           ) : !ready ? (
             <div className="mt-6 space-y-3">
               <p className="text-sm text-muted-foreground">
-                This reset link is invalid or has expired. Request a new one from the sign-in page.
+                {invite
+                  ? "This invite link is invalid or has expired. Ask an admin in your organization to send you a new one."
+                  : "This reset link is invalid or has expired. Request a new one from the sign-in page."}
               </p>
               <Link
                 to="/auth"
@@ -98,7 +129,7 @@ function ResetPasswordPage() {
             </div>
           ) : (
             <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-3">
-              <Field label="New password">
+              <Field label={invite ? "Password" : "New password"}>
                 <div className="relative">
                   <KeyRound className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   <input
@@ -134,7 +165,7 @@ function ResetPasswordPage() {
                 className="mt-2 inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {busy && <Loader2 className="size-4 animate-spin" />}
-                Update password
+                {invite ? "Set password and continue" : "Update password"}
               </button>
             </form>
           )}

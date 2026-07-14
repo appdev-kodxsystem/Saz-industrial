@@ -14,10 +14,14 @@ export function SaleDetailDrawer({
   entry,
   open,
   onOpenChange,
+  canSeeCost = true,
 }: {
   entry: LedgerEntry | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** Admins only. The server also withholds cost/profit from employees, so this
+   *  hides a section that would otherwise render as zeros for them. */
+  canSeeCost?: boolean;
 }) {
   const fetchDetail = useServerFn(getSaleDetail);
   const { data, isFetching, isError } = useQuery({
@@ -97,25 +101,27 @@ export function SaleDetailDrawer({
               />
             </Section>
 
-            {/* profit */}
-            <Section title="Profit">
-              <Row label="Cost" value={money(data.cost)} muted />
-              <Row label="Selling price" value={money(data.selling_price)} muted />
-              <Row
-                label="Profit"
-                value={money(data.profit)}
-                tone={data.profit >= 0 ? "good" : "danger"}
-              />
-              <Row
-                label="Margin"
-                value={`${
-                  data.selling_price > 0
-                    ? ((data.profit / data.selling_price) * 100).toFixed(1)
-                    : "0.0"
-                }%`}
-                muted
-              />
-            </Section>
+            {/* profit — admin-only */}
+            {canSeeCost && (
+              <Section title="Profit">
+                <Row label="Cost" value={money(data.cost)} muted />
+                <Row label="Selling price" value={money(data.selling_price)} muted />
+                <Row
+                  label="Profit"
+                  value={money(data.profit)}
+                  tone={data.profit >= 0 ? "good" : "danger"}
+                />
+                <Row
+                  label="Margin"
+                  value={`${
+                    data.selling_price > 0
+                      ? ((data.profit / data.selling_price) * 100).toFixed(1)
+                      : "0.0"
+                  }%`}
+                  muted
+                />
+              </Section>
+            )}
 
             {/* customer */}
             <Section title="Customer">

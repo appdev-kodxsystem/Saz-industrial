@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuthUser } from "@/hooks/use-auth-user";
+import { useOrg } from "@/hooks/use-org";
 import { getMyProfile } from "@/lib/profile.functions";
 import {
   DropdownMenu,
@@ -18,6 +19,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function UserMenu() {
   const { user } = useAuthUser();
+  const { org, role } = useOrg();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const getProfile = useServerFn(getMyProfile);
@@ -70,6 +72,16 @@ export function UserMenu() {
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="truncate text-sm">{user.user_metadata?.full_name || "Account"}</span>
             <span className="truncate text-xs font-normal text-muted-foreground">{user.email}</span>
+            <span className="mt-1 flex items-center gap-1.5">
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                  role === "admin" ? "bg-primary/10 text-primary" : "bg-secondary text-muted-foreground"
+                }`}
+              >
+                {role === "admin" ? "Admin" : "Employee"}
+              </span>
+              <span className="truncate text-[11px] font-normal text-muted-foreground">{org.name}</span>
+            </span>
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />

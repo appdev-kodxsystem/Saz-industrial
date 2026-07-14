@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -26,6 +26,10 @@ export const Route = createFileRoute("/_authenticated/reports")({
       { name: "description", content: "Weekly, monthly, and yearly profit reports." },
     ],
   }),
+  // Admin-only, same reasoning as Purchases: this page is profit and margin.
+  beforeLoad: ({ context }) => {
+    if (!context.isAdmin) throw redirect({ to: "/inventory" });
+  },
   component: ReportsPage,
 });
 

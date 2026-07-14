@@ -1,6 +1,8 @@
 import { PackagePlus, SearchX } from "lucide-react";
 
-export function EmptyInventory({ onAdd }: { onAdd: () => void }) {
+// `onAdd` is omitted for employees, who cannot create products. They get the
+// same empty state with no call to action and copy that tells them who can act.
+export function EmptyInventory({ onAdd }: { onAdd?: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center gap-6 rounded-3xl bg-surface px-8 py-20 text-center ring-1 ring-hairline">
       <div className="relative">
@@ -12,18 +14,22 @@ export function EmptyInventory({ onAdd }: { onAdd: () => void }) {
       <div className="flex max-w-sm flex-col gap-2">
         <h2 className="text-xl font-semibold tracking-tight">Your inventory is empty</h2>
         <p className="text-sm text-muted-foreground">
-          Add your first product to start tracking stock, sales, and profits.
+          {onAdd
+            ? "Add your first product to start tracking stock, sales, and profits."
+            : "No products have been added yet. An admin in your organization can add them."}
         </p>
       </div>
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <button
-          onClick={onAdd}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <PackagePlus className="size-4" />
-          Add First Product
-        </button>
-      </div>
+      {onAdd && (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            onClick={onAdd}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+          >
+            <PackagePlus className="size-4" />
+            Add First Product
+          </button>
+        </div>
+      )}
     </div>
   );
 }

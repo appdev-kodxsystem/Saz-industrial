@@ -14,6 +14,63 @@ export type Database = {
   }
   public: {
     Tables: {
+      organizations: {
+        Row: {
+          id: string
+          name: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      organization_members: {
+        Row: {
+          id: string
+          org_id: string
+          user_id: string | null
+          email: string
+          role: string
+          status: string
+          invited_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          user_id?: string | null
+          email: string
+          role?: string
+          status?: string
+          invited_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          user_id?: string | null
+          email?: string
+          role?: string
+          status?: string
+          invited_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       products: {
         Row: {
           category: string
@@ -22,6 +79,7 @@ export type Database = {
           id: string
           image_url: string | null
           name: string
+          org_id: string
           pinned: boolean
           purchase_price: number
           reorder_at: number
@@ -38,6 +96,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           name: string
+          org_id: string
           pinned?: boolean
           purchase_price?: number
           reorder_at?: number
@@ -54,6 +113,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           name?: string
+          org_id?: string
           pinned?: boolean
           purchase_price?: number
           reorder_at?: number
@@ -99,6 +159,7 @@ export type Database = {
         Row: {
           id: string
           product_id: string | null
+          org_id: string
           user_id: string | null
           product_name: string | null
           product_sku: string | null
@@ -112,6 +173,7 @@ export type Database = {
         Insert: {
           id?: string
           product_id?: string | null
+          org_id: string
           user_id?: string | null
           product_name?: string | null
           product_sku?: string | null
@@ -125,6 +187,7 @@ export type Database = {
         Update: {
           id?: string
           product_id?: string | null
+          org_id?: string
           user_id?: string | null
           product_name?: string | null
           product_sku?: string | null
@@ -142,6 +205,7 @@ export type Database = {
           id: string
           product_id: string | null
           stock_item_id: string | null
+          org_id: string
           user_id: string | null
           product_name: string | null
           product_sku: string | null
@@ -158,6 +222,7 @@ export type Database = {
           id?: string
           product_id?: string | null
           stock_item_id?: string | null
+          org_id: string
           user_id?: string | null
           product_name?: string | null
           product_sku?: string | null
@@ -173,6 +238,7 @@ export type Database = {
           id?: string
           product_id?: string | null
           stock_item_id?: string | null
+          org_id?: string
           user_id?: string | null
           product_name?: string | null
           product_sku?: string | null
@@ -194,6 +260,51 @@ export type Database = {
       email_exists: {
         Args: { p_email: string }
         Returns: boolean
+      }
+      current_org_id: {
+        Args: Record<string, never>
+        Returns: string | null
+      }
+      current_org_role: {
+        Args: Record<string, never>
+        Returns: string | null
+      }
+      is_org_admin: {
+        Args: Record<string, never>
+        Returns: boolean
+      }
+      apply_stock_delta: {
+        Args: { p_product_id: string; p_delta: number }
+        Returns: number
+      }
+      org_list_members: {
+        Args: Record<string, never>
+        Returns: {
+          id: string
+          user_id: string | null
+          email: string
+          role: string
+          status: string
+          display_name: string | null
+          avatar_url: string | null
+          created_at: string
+        }[]
+      }
+      org_invite_member: {
+        Args: { p_email: string; p_role: string }
+        Returns: string
+      }
+      org_discard_invite: {
+        Args: { p_member_id: string }
+        Returns: undefined
+      }
+      org_update_member_role: {
+        Args: { p_member_id: string; p_role: string }
+        Returns: undefined
+      }
+      org_remove_member: {
+        Args: { p_member_id: string }
+        Returns: undefined
       }
     }
     Enums: {

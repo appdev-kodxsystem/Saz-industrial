@@ -17,12 +17,17 @@ export function ProductDrawer({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onAddToCart: (p: ProductRow) => void;
-  onAddStock: (p: ProductRow) => void;
+  /** Omitted for employees: they cannot add stock, so the button is not
+   *  rendered, and its absence also drives the cost/profit blocks below. */
+  onAddStock?: (p: ProductRow) => void;
 }) {
   if (!product) return null;
   const sell = Number(product.selling_price);
   const buy = Number(product.purchase_price);
   const margin = sell > 0 ? ((sell - buy) / sell) * 100 : 0;
+  // Only an admin is handed onAddStock, so it doubles as the "is an admin" flag
+  // for the cost and profit blocks.
+  const canSeeCost = Boolean(onAddStock);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -56,30 +61,38 @@ export function ProductDrawer({
             <p className="text-xs text-muted-foreground">Model: {product.category}</p>
           </div>
 
+          {/* Purchase cost, margin and per-unit profit are admin-only. Employees
+              are kept off the Purchases and Reports pages for exactly this
+              reason, so leaking the same numbers here would defeat that. They
+              still see stock and the selling price — everything selling needs. */}
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-hairline ring-1 ring-hairline">
             <Stat label="Stock" value={`${product.stock} units`} />
             <Stat label="Reorder at" value={`${product.reorder_at}`} />
-            <Stat label="Purchase" value={fmt.format(buy)} />
+            {canSeeCost && <Stat label="Purchase" value={fmt.format(buy)} />}
             <Stat label="Selling" value={fmt.format(sell)} />
           </div>
 
-          <Section icon={<TrendingUp className="size-4" />} title="Profit">
-            <div className="grid grid-cols-2 gap-3">
-              <MetricBox label="Margin" value={`${margin.toFixed(1)}%`} />
-              <MetricBox label="Per unit" value={fmt.format(sell - buy)} />
-            </div>
-          </Section>
+          {canSeeCost && (
+            <Section icon={<TrendingUp className="size-4" />} title="Profit">
+              <div className="grid grid-cols-2 gap-3">
+                <MetricBox label="Margin" value={`${margin.toFixed(1)}%`} />
+                <MetricBox label="Per unit" value={fmt.format(sell - buy)} />
+              </div>
+            </Section>
+          )}
         </div>
 
         <div className="sticky bottom-0 border-t border-hairline bg-surface/95 p-4 backdrop-blur">
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => onAddStock(product)}
-              className="flex-1 rounded-xl bg-secondary py-3 text-sm font-medium"
-            >
-              Add Stock
-            </button>
+            {onAddStock && (
+              <button
+                type="button"
+                onClick={() => onAddStock(product)}
+                className="flex-1 rounded-xl bg-secondary py-3 text-sm font-medium"
+              >
+                Add Stock
+              </button>
+            )}
             <button
               type="button"
               disabled={product.stock <= 0}

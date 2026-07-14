@@ -27,6 +27,9 @@ interface Props {
   onDelete: (id: string) => void;
   relativeUpdated: string;
   reserved?: number; // units of this product currently held in carts
+  /** Admin. Gates pin + the edit/add-stock/delete menu. Employees keep the
+   *  read and sell affordances (view details, add to cart). */
+  canManage?: boolean;
 }
 
 const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR" });
@@ -42,6 +45,7 @@ export function InventoryCard({
   onDelete,
   relativeUpdated,
   reserved = 0,
+  canManage = false,
 }: Props) {
   const status = stockStatusOf(product);
   const inCart = Math.min(reserved, product.stock);
@@ -93,21 +97,23 @@ export function InventoryCard({
         <div className="absolute top-2 right-2">
           <StockBadge status={status} />
         </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePin(product.id, !product.pinned);
-          }}
-          aria-label={product.pinned ? "Unpin product" : "Pin product"}
-          className={`absolute top-2 left-2 grid size-8 place-items-center rounded-full backdrop-blur ring-1 ring-hairline transition ${
-            product.pinned
-              ? "bg-foreground text-background"
-              : "bg-surface/80 text-muted-foreground opacity-0 group-hover:opacity-100"
-          }`}
-        >
-          <Pin className="size-3.5" />
-        </button>
+        {canManage && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onTogglePin(product.id, !product.pinned);
+            }}
+            aria-label={product.pinned ? "Unpin product" : "Pin product"}
+            className={`absolute top-2 left-2 grid size-8 place-items-center rounded-full backdrop-blur ring-1 ring-hairline transition ${
+              product.pinned
+                ? "bg-foreground text-background"
+                : "bg-surface/80 text-muted-foreground opacity-0 group-hover:opacity-100"
+            }`}
+          >
+            <Pin className="size-3.5" />
+          </button>
+        )}
 
       </div>
 
@@ -149,26 +155,31 @@ export function InventoryCard({
           className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent">
           <Eye className="size-4" />
         </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            aria-label="More actions"
-            className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
-          >
-            <MoreHorizontal className="size-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onClick={() => onEdit(product)}>
-              <Pencil className="size-4" /> Edit Product
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onAddStock(product)}>
-              <Plus className="size-4" /> Add Stock
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => onDelete(product.id)} className="text-destructive focus:text-destructive">
-              <Trash2 className="size-4" /> Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Edit / Add Stock / Delete are the three product-and-stock writes.
+            The whole menu goes away for an employee — there is nothing left in
+            it they are allowed to do. */}
+        {canManage && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="More actions"
+              className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
+            >
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => onEdit(product)}>
+                <Pencil className="size-4" /> Edit Product
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onAddStock(product)}>
+                <Plus className="size-4" /> Add Stock
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onDelete(product.id)} className="text-destructive focus:text-destructive">
+                <Trash2 className="size-4" /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </article>
   );

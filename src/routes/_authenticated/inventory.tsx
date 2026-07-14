@@ -18,6 +18,7 @@ import AddProductDrawer from "@/components/inventory/AddProductDrawer";
 import AddStockDrawer from "@/components/inventory/AddStockDrawer";
 import { EmptyInventory, NoResults } from "@/components/inventory/EmptyState";
 import { PageHeader } from "@/components/inventory/AppNav";
+import { useOrg } from "@/hooks/use-org";
 import { useCart } from "@/components/cart/cart-context";
 import {
   Select,
@@ -60,6 +61,10 @@ function InventoryPage() {
   const router = useRouter();
   void router;
   void navigate;
+
+  // Admins manage the catalogue; employees read it and sell from it. This only
+  // decides what renders — the server functions and RLS enforce the same rule.
+  const { isAdmin: canManage } = useOrg();
 
   const list = useServerFn(listProducts);
   const upsert = useServerFn(upsertProduct);
@@ -166,13 +171,15 @@ function InventoryPage() {
     <>
       <PageHeader
         actions={
-          <button
-            onClick={handleAdd}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition active:scale-95"
-          >
-            <Plus className="size-4" />
-            <span className="hidden sm:inline">Add Product</span>
-          </button>
+          canManage ? (
+            <button
+              onClick={handleAdd}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition active:scale-95"
+            >
+              <Plus className="size-4" />
+              <span className="hidden sm:inline">Add Product</span>
+            </button>
+          ) : undefined
         }
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -233,7 +240,9 @@ function InventoryPage() {
         {isLoading ? (
           <GridSkeleton />
         ) : isEmpty ? (
-          <EmptyInventory onAdd={handleAdd} />
+          // Employees get the empty state without the "Add First Product" CTA —
+          // it isn't theirs to act on.
+          <EmptyInventory onAdd={canManage ? handleAdd : undefined} />
         ) : noResults ? (
           <NoResults onReset={resetFilters} />
         ) : (
@@ -246,6 +255,7 @@ function InventoryPage() {
                 <InventoryCard
                   key={p.id}
                   product={p}
+                  canManage={canManage}
                   relativeUpdated={relativeTime(p.updated_at)}
                   onOpen={setOpenProduct}
                   onAdjust={(id, delta) => adjustMut.mutate({ id, delta })}
@@ -273,61 +283,69 @@ function InventoryPage() {
         )}
       </main>
 
+      {/* Read-only detail view — employees open this to add to cart. */}
       <ProductDrawer
         product={openProduct}
         open={!!openProduct}
         onOpenChange={(v) => !v && setOpenProduct(null)}
         onAddToCart={addToCart}
-        onAddStock={(p) => setAddStockProduct(p)}
-      />
-      <AddProductDrawer
-        open={openAdd}
-        onOpenChange={(v) => {
-          if (!v) {
-            setOpenAdd(false);
-            setEditingProduct(null);
-          } else {
-            setOpenAdd(true);
-          }
-        }}
-        onSave={handleSaveProduct}
-        initialCategories={models}
-        initialProduct={editingProduct}
-      />
-      <AddStockDrawer
-        product={addStockProduct}
-        open={!!addStockProduct}
-        onOpenChange={(v) => !v && setAddStockProduct(null)}
-        onAdded={async () => {
-          setAddStockProduct(null);
-          await invalidate();
-        }}
+        onAddStock={canManage ? (p) => setAddStockProduct(p) : undefined}
       />
 
-      <ConfirmDialog
-        open={!!deleteId}
-        onOpenChange={(v) => !v && !delMut.isPending && setDeleteId(null)}
-        title="Delete product?"
-        description={
-          <>
-            {(() => {
-              const name = products.find((p) => p.id === deleteId)?.name;
-              return name ? (
-                <>
-                  <span className="font-medium text-foreground">{name}</span> and its stock history
-                  will be permanently removed. This cannot be undone.
-                </>
-              ) : (
-                "This product and its stock history will be permanently removed. This cannot be undone."
-              );
-            })()}
-          </>
-        }
-        confirmText="Delete"
-        icon={<Trash2 className="size-6" />}
-        loading={delMut.isPending}
-        onConfirm={() => deleteId && delMut.mutate({ id: deleteId })}
-      />
+      {/* Every product/stock write surface below is admin-only, so for an
+          employee it is never mounted at all — not merely hidden. */}
+      {canManage && (
+        <>
+          <AddProductDrawer
+            open={openAdd}
+            onOpenChange={(v) => {
+              if (!v) {
+                setOpenAdd(false);
+                setEditingProduct(null);
+              } else {
+                setOpenAdd(true);
+              }
+            }}
+            onSave={handleSaveProduct}
+            initialCategories={models}
+            initialProduct={editingProduct}
+          />
+          <AddStockDrawer
+            product={addStockProduct}
+            open={!!addStockProduct}
+            onOpenChange={(v) => !v && setAddStockProduct(null)}
+            onAdded={async () => {
+              setAddStockProduct(null);
+              await invalidate();
+            }}
+          />
+
+          <ConfirmDialog
+            open={!!deleteId}
+            onOpenChange={(v) => !v && !delMut.isPending && setDeleteId(null)}
+            title="Delete product?"
+            description={
+              <>
+                {(() => {
+                  const name = products.find((p) => p.id === deleteId)?.name;
+                  return name ? (
+                    <>
+                      <span className="font-medium text-foreground">{name}</span> and its stock
+                      history will be permanently removed. This cannot be undone.
+                    </>
+                  ) : (
+                    "This product and its stock history will be permanently removed. This cannot be undone."
+                  );
+                })()}
+              </>
+            }
+            confirmText="Delete"
+            icon={<Trash2 className="size-6" />}
+            loading={delMut.isPending}
+            onConfirm={() => deleteId && delMut.mutate({ id: deleteId })}
+          />
+        </>
+      )}
     </>
   );
 }
