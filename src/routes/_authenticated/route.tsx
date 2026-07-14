@@ -59,8 +59,11 @@ export const Route = createFileRoute("/_authenticated")({
       org: membership.org,
       role: membership.role,
       isAdmin: membership.role === "admin",
-      // The caller's own row in organization_members. The Team page uses it to
-      // recognise "you" and to stop an admin removing themselves.
+      // The person who created this organization. Permanently an admin — cannot
+      // be demoted or removed by anyone, including other admins.
+      isOwner: membership.isOwner,
+      // The caller's own row in organization_members. The Organization page uses
+      // it to recognise "you" and to stop an admin removing themselves.
       membershipId: membership.membershipId,
     };
   },

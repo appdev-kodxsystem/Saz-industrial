@@ -1,13 +1,25 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Loader2, Mail, MoreHorizontal, ShieldCheck, Trash2, UserPlus, Send } from "lucide-react";
+import { useRouter } from "@tanstack/react-router";
+import {
+  Building2,
+  Crown,
+  Loader2,
+  Mail,
+  MoreHorizontal,
+  Send,
+  ShieldCheck,
+  Trash2,
+  UserPlus,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   listOrgMembers,
   inviteMember,
   removeMember,
+  renameOrg,
   resendInvite,
   updateMemberRole,
   type OrgMember,
@@ -31,32 +43,33 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export const Route = createFileRoute("/_authenticated/team")({
+export const Route = createFileRoute("/_authenticated/organization")({
   head: () => ({
     meta: [
-      { title: "Team — SAZ Industrial" },
-      { name: "description", content: "Invite teammates and manage their roles." },
+      { title: "Organization — SAZ Industrial" },
+      { name: "description", content: "Organization settings, members and roles." },
     ],
   }),
   beforeLoad: ({ context }) => {
     if (!context.isAdmin) throw redirect({ to: "/inventory" });
   },
-  component: TeamPage,
+  component: OrganizationPage,
 });
 
 const ROLE_COPY: Record<OrgRole, string> = {
-  admin: "Full access — products, stock, purchases, reports and the team.",
+  admin: "Full access — products, stock, purchases, reports and the organization.",
   employee: "Can view inventory and make sales. Cannot add products or stock.",
 };
 
 // The invite link lands here; the page swaps to "set your password" when the
-// URL carries an invite token. Built from the live origin so it works in dev,
+// member still owes us one. Built from the live origin so it works in dev,
 // preview and production without a hardcoded host.
 const inviteRedirectTo = () =>
   typeof window === "undefined" ? "" : `${window.location.origin}/reset-password`;
 
-function TeamPage() {
+function OrganizationPage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const { org, membershipId } = useOrg();
 
   const list = useServerFn(listOrgMembers);
@@ -64,10 +77,15 @@ function TeamPage() {
   const setRole = useServerFn(updateMemberRole);
   const remove = useServerFn(removeMember);
   const resend = useServerFn(resendInvite);
+  const rename = useServerFn(renameOrg);
 
+  const [name, setName] = useState(org.name);
   const [email, setEmail] = useState("");
   const [role, setRole_] = useState<OrgRole>("employee");
   const [removing, setRemoving] = useState<OrgMember | null>(null);
+
+  // Keep the field in step if the name changes elsewhere (or after a rename).
+  useEffect(() => setName(org.name), [org.name]);
 
   const { data: members = [], isLoading } = useQuery({
     queryKey: ["org-members"],
@@ -75,6 +93,17 @@ function TeamPage() {
   });
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["org-members"] });
+
+  const renameMut = useMutation({
+    mutationFn: (vars: { name: string }) => rename({ data: vars }),
+    onSuccess: async () => {
+      // The org name lives in the /_authenticated route context, so re-run its
+      // beforeLoad — otherwise the nav and account menu keep the stale name.
+      await router.invalidate();
+      toast.success("Organization renamed");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const inviteMut = useMutation({
     mutationFn: (vars: { email: string; role: OrgRole }) =>
@@ -116,6 +145,13 @@ function TeamPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  function onRename(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = name.trim();
+    if (!clean || clean === org.name) return;
+    renameMut.mutate({ name: clean });
+  }
+
   function onInvite(e: React.FormEvent) {
     e.preventDefault();
     const clean = email.trim().toLowerCase();
@@ -123,15 +159,49 @@ function TeamPage() {
     inviteMut.mutate({ email: clean, role });
   }
 
+  const nameDirty = name.trim() !== org.name && name.trim().length > 0;
+
   return (
     <>
-      <PageHeader title="Team" subtitle={org.name} />
+      <PageHeader title="Organization" subtitle="Settings, members and roles" />
 
-      <main className="mx-auto max-w-4xl animate-in fade-in slide-in-from-bottom-3 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+      <main className="mx-auto flex max-w-4xl animate-in fade-in slide-in-from-bottom-3 flex-col gap-6 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+        {/* ---- General ------------------------------------------------- */}
+        <section className="rounded-3xl bg-surface p-5 ring-1 ring-hairline sm:p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <Building2 className="size-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">General</h2>
+          </div>
+
+          <form onSubmit={onRename} className="flex flex-col gap-3 sm:flex-row sm:items-start">
+            <label className="flex flex-1 flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Organization name</span>
+              <input
+                type="text"
+                required
+                maxLength={120}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. SAZ Industrial"
+                className="w-full rounded-lg bg-surface-muted px-3 py-2.5 text-sm ring-1 ring-hairline focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={!nameDirty || renameMut.isPending}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50 sm:mt-[22px]"
+            >
+              {renameMut.isPending && <Loader2 className="size-4 animate-spin" />}
+              Save
+            </button>
+          </form>
+        </section>
+
+        {/* ---- Invite --------------------------------------------------- */}
         <section className="rounded-3xl bg-surface p-5 ring-1 ring-hairline sm:p-6">
           <div className="mb-4 flex items-center gap-2">
             <UserPlus className="size-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Invite a teammate</h2>
+            <h2 className="text-sm font-semibold">Invite a member</h2>
           </div>
 
           <form onSubmit={onInvite} className="flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -171,7 +241,8 @@ function TeamPage() {
           <p className="mt-3 text-xs text-muted-foreground">{ROLE_COPY[role]}</p>
         </section>
 
-        <section className="mt-6">
+        {/* ---- Members -------------------------------------------------- */}
+        <section>
           <h2 className="mb-3 px-1 text-sm font-semibold">
             Members{" "}
             <span className="font-normal text-muted-foreground">
@@ -181,7 +252,7 @@ function TeamPage() {
 
           {isLoading ? (
             <div className="flex items-center gap-2 rounded-2xl bg-surface p-6 text-sm text-muted-foreground ring-1 ring-hairline">
-              <Loader2 className="size-4 animate-spin" /> Loading team…
+              <Loader2 className="size-4 animate-spin" /> Loading members…
             </div>
           ) : (
             <ul className="flex flex-col gap-2">
@@ -204,61 +275,64 @@ function TeamPage() {
                       <span className="truncate text-xs text-muted-foreground">{m.email}</span>
                     </div>
 
-                    {/* password_set, not status: the invite creates their auth
-                        account immediately, so status flips to 'active' before
-                        they have done anything. Not having chosen a password is
-                        what "invite outstanding" actually means. */}
                     {!m.password_set && (
                       <span className="hidden shrink-0 rounded-full bg-warning/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-warning-foreground ring-1 ring-hairline sm:inline">
                         Invite pending
                       </span>
                     )}
 
-                    <RoleBadge role={m.role} />
+                    <RoleBadge role={m.role} isOwner={m.is_owner} />
 
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        aria-label={`Manage ${m.email}`}
-                        className="grid size-9 shrink-0 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
-                      >
-                        <MoreHorizontal className="size-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-52">
-                        {!m.password_set && (
-                          <>
-                            <DropdownMenuItem
-                              onClick={() => resendMut.mutate({ memberId: m.id })}
-                            >
-                              <Send className="size-4" /> Resend invite
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                          </>
-                        )}
-                        <DropdownMenuItem
-                          disabled={m.role === "admin"}
-                          onClick={() => roleMut.mutate({ memberId: m.id, role: "admin" })}
+                    {/* The owner created this organization: their role cannot be
+                        changed and they cannot be removed — by anyone, including
+                        other admins. So there is no menu to show. The database
+                        refuses those operations too; this just keeps the UI
+                        honest about what is possible. */}
+                    {m.is_owner ? (
+                      <span className="size-9 shrink-0" aria-hidden />
+                    ) : (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          aria-label={`Manage ${m.email}`}
+                          className="grid size-9 shrink-0 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
                         >
-                          <ShieldCheck className="size-4" /> Make admin
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={m.role === "employee"}
-                          onClick={() => roleMut.mutate({ memberId: m.id, role: "employee" })}
-                        >
-                          <ShieldCheck className="size-4" /> Make employee
-                        </DropdownMenuItem>
-                        {!isSelf && (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => setRemoving(m)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="size-4" /> Remove from team
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                          <MoreHorizontal className="size-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-52">
+                          {!m.password_set && (
+                            <>
+                              <DropdownMenuItem onClick={() => resendMut.mutate({ memberId: m.id })}>
+                                <Send className="size-4" /> Resend invite
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
+                          <DropdownMenuItem
+                            disabled={m.role === "admin"}
+                            onClick={() => roleMut.mutate({ memberId: m.id, role: "admin" })}
+                          >
+                            <ShieldCheck className="size-4" /> Make admin
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={m.role === "employee"}
+                            onClick={() => roleMut.mutate({ memberId: m.id, role: "employee" })}
+                          >
+                            <ShieldCheck className="size-4" /> Make employee
+                          </DropdownMenuItem>
+                          {!isSelf && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => setRemoving(m)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 className="size-4" /> Remove from organization
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </li>
                 );
               })}
@@ -270,7 +344,7 @@ function TeamPage() {
       <ConfirmDialog
         open={!!removing}
         onOpenChange={(v) => !v && !removeMut.isPending && setRemoving(null)}
-        title="Remove from team?"
+        title="Remove from organization?"
         description={
           <>
             <span className="font-medium text-foreground">
@@ -290,7 +364,15 @@ function TeamPage() {
   );
 }
 
-function RoleBadge({ role }: { role: OrgRole }) {
+function RoleBadge({ role, isOwner }: { role: OrgRole; isOwner: boolean }) {
+  if (isOwner) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-primary ring-1 ring-hairline">
+        <Crown className="size-3" />
+        Owner
+      </span>
+    );
+  }
   const admin = role === "admin";
   return (
     <span

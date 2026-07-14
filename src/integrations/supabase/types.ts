@@ -18,18 +18,21 @@ export type Database = {
         Row: {
           id: string
           name: string
+          owner_id: string | null
           created_at: string
           updated_at: string
         }
         Insert: {
           id?: string
           name: string
+          owner_id?: string | null
           created_at?: string
           updated_at?: string
         }
         Update: {
           id?: string
           name?: string
+          owner_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -291,8 +294,13 @@ export type Database = {
           display_name: string | null
           avatar_url: string | null
           password_set: boolean
+          is_owner: boolean
           created_at: string
         }[]
+      }
+      org_rename: {
+        Args: { p_name: string }
+        Returns: undefined
       }
       org_mark_password_set: {
         Args: Record<string, never>

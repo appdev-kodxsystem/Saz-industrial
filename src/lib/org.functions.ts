@@ -26,6 +26,9 @@ export interface OrgMember {
    *  still outstanding" signal — `status` flips to active the moment the invite
    *  creates their auth account, long before they do anything. */
   password_set: boolean;
+  /** The person who created the organization. Permanently an admin: cannot be
+   *  demoted or removed, by anyone. The Team list shows no action menu for them. */
+  is_owner: boolean;
   created_at: string;
 }
 
@@ -34,6 +37,8 @@ export interface MyOrg {
   role: OrgRole;
   membershipId: string;
   passwordSet: boolean;
+  /** Whether the CALLER is the org's owner. */
+  isOwner: boolean;
 }
 
 /**
@@ -44,7 +49,11 @@ export const getMyOrg = createServerFn({ method: "GET" })
   .middleware([requireOrgMember])
   .handler(async ({ context }): Promise<MyOrg> => {
     const [orgRes, memberRes] = await Promise.all([
-      context.supabase.from("organizations").select("id, name").eq("id", context.orgId).single(),
+      context.supabase
+        .from("organizations")
+        .select("id, name, owner_id")
+        .eq("id", context.orgId)
+        .single(),
       context.supabase
         .from("organization_members")
         .select("password_set")
@@ -58,7 +67,25 @@ export const getMyOrg = createServerFn({ method: "GET" })
       role: context.role,
       membershipId: context.membershipId,
       passwordSet: memberRes.data.password_set,
+      isOwner: orgRes.data.owner_id === context.userId,
     };
+  });
+
+/**
+ * Rename the organization. Admin-only, enforced in the database.
+ *
+ * Goes through an RPC rather than a plain UPDATE because RLS has no column-level
+ * security: a blanket UPDATE grant on `organizations` would also have let an
+ * admin PATCH `owner_id` onto themselves and seize the org. org_rename can touch
+ * nothing but `name`.
+ */
+export const renameOrg = createServerFn({ method: "POST" })
+  .middleware([requireOrgAdmin])
+  .inputValidator((d: unknown) => z.object({ name: z.string().trim().min(1).max(120) }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { error } = await context.supabase.rpc("org_rename", { p_name: data.name });
+    if (error) throw new Error(error.message);
+    return { ok: true, name: data.name };
   });
 
 /**

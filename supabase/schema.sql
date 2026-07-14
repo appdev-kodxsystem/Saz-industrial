@@ -110,9 +110,14 @@ CREATE TRIGGER profiles_set_updated_at
 -- ---------------------------------------------------------------------------
 -- The tenant. An organization has many members; they all read the same
 -- products, stock and sales.
+-- owner_id: the member who created the org. Permanently an admin — cannot be
+-- demoted or removed, by anyone, including other admins. SET NULL rather than
+-- CASCADE so an organization is never deleted as a side effect of deleting a
+-- user (the owner can't be removed anyway; this is belt and braces).
 CREATE TABLE IF NOT EXISTS public.organizations (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name        TEXT NOT NULL,
+  owner_id    UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -159,12 +164,15 @@ CREATE TRIGGER organization_members_set_updated_at
   BEFORE UPDATE ON public.organization_members
   FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
 
+-- No UPDATE grant on organizations: renaming goes through org_rename(), because
+-- RLS has no column-level security and a blanket UPDATE would also have let an
+-- admin PATCH `owner_id` onto themselves and seize the org.
 REVOKE ALL ON public.organizations        FROM PUBLIC, anon;
 REVOKE ALL ON public.organization_members FROM PUBLIC, anon;
-GRANT SELECT, UPDATE ON public.organizations        TO authenticated;
-GRANT SELECT         ON public.organization_members TO authenticated;
-GRANT ALL            ON public.organizations        TO service_role;
-GRANT ALL            ON public.organization_members TO service_role;
+GRANT SELECT ON public.organizations        TO authenticated;
+GRANT SELECT ON public.organization_members TO authenticated;
+GRANT ALL    ON public.organizations        TO service_role;
+GRANT ALL    ON public.organization_members TO service_role;
 
 
 -- ---------------------------------------------------------------------------
@@ -216,12 +224,6 @@ DROP POLICY IF EXISTS "Members can view their teammates"     ON public.organizat
 CREATE POLICY "Members can view their organization"
   ON public.organizations FOR SELECT
   TO authenticated USING (id = (select public.current_org_id()));
-
-CREATE POLICY "Admins can rename their organization"
-  ON public.organizations FOR UPDATE
-  TO authenticated
-  USING      (id = (select public.current_org_id()) AND (select public.is_org_admin()))
-  WITH CHECK (id = (select public.current_org_id()) AND (select public.is_org_admin()));
 
 CREATE POLICY "Members can view their teammates"
   ON public.organization_members FOR SELECT
@@ -287,14 +289,16 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- (b) self-signup: their own org, as admin
+  -- (b) self-signup: their own org, as its admin AND its owner
   v_org_name := COALESCE(
     NULLIF(trim(NEW.raw_user_meta_data->>'company'), ''),
     NULLIF(trim(NEW.raw_user_meta_data->>'full_name'), ''),
     split_part(NEW.email, '@', 1)
   );
 
-  INSERT INTO public.organizations (name) VALUES (v_org_name) RETURNING id INTO v_org_id;
+  INSERT INTO public.organizations (name, owner_id)
+  VALUES (v_org_name, NEW.id)
+  RETURNING id INTO v_org_id;
 
   INSERT INTO public.organization_members (org_id, user_id, email, role, status)
   VALUES (v_org_id, NEW.id, NEW.email, 'admin', 'active');
@@ -589,16 +593,63 @@ DROP FUNCTION IF EXISTS public.org_list_members();
 CREATE FUNCTION public.org_list_members()
 RETURNS TABLE (
   id UUID, user_id UUID, email TEXT, role TEXT, status TEXT,
-  display_name TEXT, avatar_url TEXT, password_set BOOLEAN, created_at TIMESTAMPTZ
+  display_name TEXT, avatar_url TEXT, password_set BOOLEAN,
+  is_owner BOOLEAN, created_at TIMESTAMPTZ
 )
 LANGUAGE sql SECURITY DEFINER STABLE SET search_path = public
 AS $$
   SELECT m.id, m.user_id, m.email, m.role, m.status,
-         p.display_name, p.avatar_url, m.password_set, m.created_at
+         p.display_name, p.avatar_url, m.password_set,
+         (m.user_id IS NOT NULL AND m.user_id = o.owner_id) AS is_owner,
+         m.created_at
   FROM public.organization_members m
+  JOIN public.organizations o ON o.id = m.org_id
   LEFT JOIN public.profiles p ON p.id = m.user_id
   WHERE m.org_id = public.current_org_id()
-  ORDER BY m.created_at;
+  ORDER BY (m.user_id IS NOT NULL AND m.user_id = o.owner_id) DESC, m.created_at;
+$$;
+
+-- Is this membership row the organization's owner?
+CREATE OR REPLACE FUNCTION public.is_org_owner_member(p_member_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.organization_members m
+    JOIN public.organizations o ON o.id = m.org_id
+    WHERE m.id = p_member_id
+      AND m.user_id IS NOT NULL
+      AND m.user_id = o.owner_id
+  );
+$$;
+
+-- Rename the org. Admins only, and it can touch nothing but `name` — which is
+-- exactly why this exists instead of an UPDATE policy (RLS cannot restrict
+-- columns, so a blanket UPDATE would have exposed owner_id).
+CREATE OR REPLACE FUNCTION public.org_rename(p_name TEXT)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_name TEXT;
+BEGIN
+  IF NOT public.is_org_admin() THEN
+    RAISE EXCEPTION 'Only an admin can rename the organization';
+  END IF;
+
+  v_name := trim(p_name);
+  IF v_name = '' OR v_name IS NULL THEN
+    RAISE EXCEPTION 'Organization name cannot be empty';
+  END IF;
+  IF length(v_name) > 120 THEN
+    RAISE EXCEPTION 'Organization name is too long';
+  END IF;
+
+  UPDATE public.organizations
+     SET name = v_name
+   WHERE id = public.current_org_id();
+END;
 $$;
 
 -- The invitee closes the loop on themselves once they have actually chosen a
@@ -682,6 +733,11 @@ BEGIN
     RAISE EXCEPTION 'Unknown role: %', p_role;
   END IF;
 
+  -- The owner is permanently an admin of the org they created.
+  IF public.is_org_owner_member(p_member_id) THEN
+    RAISE EXCEPTION 'The organization owner''s role cannot be changed';
+  END IF;
+
   v_org_id := public.current_org_id();
 
   SELECT role INTO v_old_role
@@ -718,6 +774,11 @@ DECLARE
 BEGIN
   IF NOT public.is_org_admin() THEN
     RAISE EXCEPTION 'Only an admin can remove members';
+  END IF;
+
+  -- Nobody removes the owner — not another admin, not themselves.
+  IF public.is_org_owner_member(p_member_id) THEN
+    RAISE EXCEPTION 'The organization owner cannot be removed';
   END IF;
 
   v_org_id := public.current_org_id();
@@ -772,6 +833,9 @@ REVOKE EXECUTE ON FUNCTION public.org_discard_invite(UUID)              FROM PUB
 REVOKE EXECUTE ON FUNCTION public.org_update_member_role(UUID, TEXT)    FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.org_remove_member(UUID)               FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.assert_org_keeps_an_admin(UUID, UUID) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.is_org_owner_member(UUID)             FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.org_rename(TEXT)                      FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION public.org_rename(TEXT)                      TO authenticated;
 
 GRANT EXECUTE ON FUNCTION public.org_list_members()                 TO authenticated;
 GRANT EXECUTE ON FUNCTION public.org_mark_password_set()            TO authenticated;

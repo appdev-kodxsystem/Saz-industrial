@@ -1,6 +1,6 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Boxes, ShoppingCart, Truck, BarChart3, Wallet, Menu, Users } from "lucide-react";
+import { Boxes, ShoppingCart, Truck, BarChart3, Wallet, Menu, Building2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { UserMenu } from "@/components/inventory/UserMenu";
 import { CartButton } from "@/components/cart/CartButton";
@@ -26,7 +26,7 @@ const NAV: NavItem[] = [
   { to: "/pending-payments", label: "Pending", icon: Wallet },
   { to: "/purchases", label: "Purchases", icon: Truck, adminOnly: true },
   { to: "/reports", label: "Reports", icon: BarChart3, adminOnly: true },
-  { to: "/team", label: "Team", icon: Users, adminOnly: true },
+  { to: "/organization", label: "Organization", icon: Building2, adminOnly: true },
 ];
 
 /**
