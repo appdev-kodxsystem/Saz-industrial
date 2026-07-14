@@ -204,7 +204,11 @@ function TeamPage() {
                       <span className="truncate text-xs text-muted-foreground">{m.email}</span>
                     </div>
 
-                    {m.status === "pending" && (
+                    {/* password_set, not status: the invite creates their auth
+                        account immediately, so status flips to 'active' before
+                        they have done anything. Not having chosen a password is
+                        what "invite outstanding" actually means. */}
+                    {!m.password_set && (
                       <span className="hidden shrink-0 rounded-full bg-warning/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-warning-foreground ring-1 ring-hairline sm:inline">
                         Invite pending
                       </span>
@@ -220,7 +224,7 @@ function TeamPage() {
                         <MoreHorizontal className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-52">
-                        {m.status === "pending" && (
+                        {!m.password_set && (
                           <>
                             <DropdownMenuItem
                               onClick={() => resendMut.mutate({ memberId: m.id })}

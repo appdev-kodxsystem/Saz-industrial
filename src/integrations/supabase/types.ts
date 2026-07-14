@@ -43,6 +43,7 @@ export type Database = {
           email: string
           role: string
           status: string
+          password_set: boolean
           invited_by: string | null
           created_at: string
           updated_at: string
@@ -287,8 +288,13 @@ export type Database = {
           status: string
           display_name: string | null
           avatar_url: string | null
+          password_set: boolean
           created_at: string
         }[]
+      }
+      org_mark_password_set: {
+        Args: Record<string, never>
+        Returns: undefined
       }
       org_invite_member: {
         Args: { p_email: string; p_role: string }

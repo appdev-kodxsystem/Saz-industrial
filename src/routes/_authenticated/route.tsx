@@ -43,6 +43,17 @@ export const Route = createFileRoute("/_authenticated")({
       );
     }
 
+    // An invited teammate already has an account (inviteUserByEmail creates it
+    // up front) but has not chosen a password yet. Supabase's redirect_to is
+    // supposed to land them on /reset-password, but that silently falls back to
+    // the Site URL whenever the origin isn't on the Redirect URLs allowlist —
+    // every Vercel preview domain, for instance — dropping them straight into
+    // the app. So enforce it here instead of trusting the redirect: until they
+    // have set a password, the only page they can reach is the one that sets it.
+    if (!membership.passwordSet) {
+      throw redirect({ to: "/reset-password" });
+    }
+
     return {
       user: data.user,
       org: membership.org,

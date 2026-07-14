@@ -1,8 +1,10 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { getMyOrg, markPasswordSet } from "@/lib/org.functions";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/reset-password")({
@@ -16,12 +18,12 @@ export const Route = createFileRoute("/reset-password")({
   component: ResetPasswordPage,
 });
 
-// An invite link and a password-reset link both land here, but they are
-// different moments: one is a new teammate choosing their first password, the
-// other is an existing user recovering. Supabase marks which is which with
-// `type=invite` in the URL hash, so read it before the client consumes and
-// clears the hash.
-function isInviteLink() {
+// A password-reset link says so in the URL hash. An INVITE, though, can arrive
+// here two ways: straight off the email link (hash says type=invite), or bounced
+// here by the /_authenticated guard because the member's password_set is still
+// false. The hash alone therefore under-detects invites — see below, where the
+// database gets the final say.
+function hashSaysInvite() {
   if (typeof window === "undefined") return false;
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   return hash.get("type") === "invite";
@@ -29,12 +31,16 @@ function isInviteLink() {
 
 function ResetPasswordPage() {
   const navigate = useNavigate();
+  const router = useRouter();
+  const fetchOrg = useServerFn(getMyOrg);
+  const confirmPasswordSet = useServerFn(markPasswordSet);
+
   const [ready, setReady] = useState(false);
   const [checking, setChecking] = useState(true);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [invite] = useState(isInviteLink);
+  const [invite, setInvite] = useState(hashSaysInvite);
 
   // The email lands here with a token in the URL hash. The supabase client
   // (detectSessionInUrl) exchanges it for a session and fires PASSWORD_RECOVERY.
@@ -43,12 +49,31 @@ function ResetPasswordPage() {
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY" || session) setReady(true);
     });
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setReady(true);
-      setChecking(false);
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!data.session) {
+        setChecking(false);
+        return;
+      }
+      setReady(true);
+
+      // Ask the database whether this person still owes us a password. That is
+      // the authoritative answer: it's true for an invitee no matter which URL
+      // Supabase happened to drop them on, and false for someone merely
+      // resetting. A failure here just means "not an invite" — never block the
+      // reset flow on it.
+      try {
+        const membership = await fetchOrg();
+        if (!membership.passwordSet) setInvite(true);
+      } catch {
+        // no membership / backend hiccup — fall back to the URL's verdict
+      } finally {
+        setChecking(false);
+      }
     });
+
     return () => sub.subscription.unsubscribe();
-  }, []);
+  }, [fetchOrg]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -66,9 +91,13 @@ function ResetPasswordPage() {
       if (error) throw error;
 
       if (invite) {
-        // A new teammate just set their first password. Their membership was
-        // already activated when the invite created their account, so drop them
-        // straight into the app rather than bouncing them to a login form.
+        // Clear password_set so the /_authenticated guard stops bouncing them
+        // back here. Do this BEFORE navigating, or the guard fires again and
+        // they ping-pong on this screen forever. invalidate() then forces
+        // beforeLoad to re-read the membership rather than reuse the cached
+        // context that still says "no password".
+        await confirmPasswordSet({ data: undefined });
+        await router.invalidate();
         toast.success("Welcome aboard! Your password is set.");
         navigate({ to: "/inventory", replace: true });
         return;

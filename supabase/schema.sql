@@ -135,6 +135,11 @@ CREATE TABLE IF NOT EXISTS public.organization_members (
   email       TEXT NOT NULL,
   role        TEXT NOT NULL DEFAULT 'employee' CHECK (role IN ('admin', 'employee')),
   status      TEXT NOT NULL DEFAULT 'pending'  CHECK (status IN ('pending', 'active')),
+  -- false until the member has chosen their own password. Invites create the
+  -- auth account up front, so `status` is 'active' before the invitee has done
+  -- anything — this is the honest "invite still outstanding" signal, and the
+  -- /_authenticated guard bounces anyone with it false to /reset-password.
+  password_set BOOLEAN NOT NULL DEFAULT true,
   invited_by  UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -575,19 +580,33 @@ GRANT  EXECUTE ON FUNCTION public.apply_stock_delta(UUID, INTEGER) TO authentica
 -- bypasses RLS. (Sending the invite EMAIL still needs the service-role key —
 -- that is Supabase's admin Auth API, not SQL.)
 
-CREATE OR REPLACE FUNCTION public.org_list_members()
+DROP FUNCTION IF EXISTS public.org_list_members();
+
+CREATE FUNCTION public.org_list_members()
 RETURNS TABLE (
   id UUID, user_id UUID, email TEXT, role TEXT, status TEXT,
-  display_name TEXT, avatar_url TEXT, created_at TIMESTAMPTZ
+  display_name TEXT, avatar_url TEXT, password_set BOOLEAN, created_at TIMESTAMPTZ
 )
 LANGUAGE sql SECURITY DEFINER STABLE SET search_path = public
 AS $$
   SELECT m.id, m.user_id, m.email, m.role, m.status,
-         p.display_name, p.avatar_url, m.created_at
+         p.display_name, p.avatar_url, m.password_set, m.created_at
   FROM public.organization_members m
   LEFT JOIN public.profiles p ON p.id = m.user_id
   WHERE m.org_id = public.current_org_id()
   ORDER BY m.created_at;
+$$;
+
+-- The invitee closes the loop on themselves once they have actually chosen a
+-- password. No arguments: the update is scoped to auth.uid(), so it can only
+-- ever clear the flag for the caller.
+CREATE OR REPLACE FUNCTION public.org_mark_password_set()
+RETURNS VOID
+LANGUAGE sql SECURITY DEFINER SET search_path = public
+AS $$
+  UPDATE public.organization_members
+     SET password_set = true
+   WHERE user_id = (select auth.uid());
 $$;
 
 CREATE OR REPLACE FUNCTION public.org_invite_member(p_email TEXT, p_role TEXT)
@@ -616,8 +635,10 @@ BEGIN
     RAISE EXCEPTION 'That email is already on your team';
   END IF;
 
-  INSERT INTO public.organization_members (org_id, email, role, status, invited_by)
-  VALUES (v_org_id, v_email, p_role, 'pending', (select auth.uid()))
+  -- password_set = false: they have no password yet, and the authenticated
+  -- layout will hold them on /reset-password until they choose one.
+  INSERT INTO public.organization_members (org_id, email, role, status, invited_by, password_set)
+  VALUES (v_org_id, v_email, p_role, 'pending', (select auth.uid()), false)
   RETURNING id INTO v_id;
 
   RETURN v_id;
@@ -734,6 +755,7 @@ END;
 $$;
 
 REVOKE EXECUTE ON FUNCTION public.org_list_members()                    FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.org_mark_password_set()               FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.org_invite_member(TEXT, TEXT)         FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.org_discard_invite(UUID)              FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.org_update_member_role(UUID, TEXT)    FROM PUBLIC, anon;
@@ -741,6 +763,7 @@ REVOKE EXECUTE ON FUNCTION public.org_remove_member(UUID)               FROM PUB
 REVOKE EXECUTE ON FUNCTION public.assert_org_keeps_an_admin(UUID, UUID) FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.org_list_members()                 TO authenticated;
+GRANT EXECUTE ON FUNCTION public.org_mark_password_set()            TO authenticated;
 GRANT EXECUTE ON FUNCTION public.org_invite_member(TEXT, TEXT)      TO authenticated;
 GRANT EXECUTE ON FUNCTION public.org_discard_invite(UUID)           TO authenticated;
 GRANT EXECUTE ON FUNCTION public.org_update_member_role(UUID, TEXT) TO authenticated;

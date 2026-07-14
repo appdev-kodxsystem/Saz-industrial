@@ -22,6 +22,10 @@ export interface OrgMember {
   status: "pending" | "active";
   display_name: string | null;
   avatar_url: string | null;
+  /** false until the member has chosen their own password. The real "invite
+   *  still outstanding" signal — `status` flips to active the moment the invite
+   *  creates their auth account, long before they do anything. */
+  password_set: boolean;
   created_at: string;
 }
 
@@ -29,6 +33,7 @@ export interface MyOrg {
   org: { id: string; name: string };
   role: OrgRole;
   membershipId: string;
+  passwordSet: boolean;
 }
 
 /**
@@ -38,17 +43,35 @@ export interface MyOrg {
 export const getMyOrg = createServerFn({ method: "GET" })
   .middleware([requireOrgMember])
   .handler(async ({ context }): Promise<MyOrg> => {
-    const { data, error } = await context.supabase
-      .from("organizations")
-      .select("id, name")
-      .eq("id", context.orgId)
-      .single();
-    if (error) throw new Error(error.message);
+    const [orgRes, memberRes] = await Promise.all([
+      context.supabase.from("organizations").select("id, name").eq("id", context.orgId).single(),
+      context.supabase
+        .from("organization_members")
+        .select("password_set")
+        .eq("id", context.membershipId)
+        .single(),
+    ]);
+    if (orgRes.error) throw new Error(orgRes.error.message);
+    if (memberRes.error) throw new Error(memberRes.error.message);
     return {
-      org: { id: data.id, name: data.name },
+      org: { id: orgRes.data.id, name: orgRes.data.name },
       role: context.role,
       membershipId: context.membershipId,
+      passwordSet: memberRes.data.password_set,
     };
+  });
+
+/**
+ * Called by the set-password screen once the invitee has actually chosen a
+ * password. Takes no arguments — the database scopes the update to auth.uid(),
+ * so it can only ever clear the flag for the caller themselves.
+ */
+export const markPasswordSet = createServerFn({ method: "POST" })
+  .middleware([requireOrgMember])
+  .handler(async ({ context }) => {
+    const { error } = await context.supabase.rpc("org_mark_password_set");
+    if (error) throw new Error(error.message);
+    return { ok: true };
   });
 
 /** Everyone in the caller's org, pending invites included. */
@@ -164,14 +187,17 @@ export const resendInvite = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { data: member, error } = await context.supabase
       .from("organization_members")
-      .select("id, email, role, status")
+      .select("id, email, role, password_set")
       .eq("id", data.memberId)
       .eq("org_id", context.orgId)
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!member) throw new Error("Member not found");
-    if (member.status !== "pending") {
-      throw new Error("That member has already accepted their invite.");
+    // password_set, not status — the invite creates their account right away, so
+    // status is 'active' from the moment it is sent. Owing us a password is what
+    // makes an invite still outstanding.
+    if (member.password_set) {
+      throw new Error("That member has already set their password.");
     }
 
     await sendInviteEmail(member.email, data.redirectTo);
