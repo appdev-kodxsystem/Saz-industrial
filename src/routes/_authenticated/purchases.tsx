@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { LedgerPage, dateCell, productCell, money, type LedgerConfig } from "@/components/inventory/LedgerPage";
+import { ReceiptLink } from "@/components/inventory/ReceiptLink";
 
 export const Route = createFileRoute("/_authenticated/purchases")({
   head: () => ({ meta: [{ title: "Purchases — SAZ Industrial" }] }),
@@ -32,6 +33,7 @@ const config: LedgerConfig = {
     { header: "Product", render: productCell },
     { header: "Batch / Mfr ID", render: (e) => <span className="text-muted-foreground">{e.reference}</span> },
     { header: "Purchase Price", align: "right", render: (e) => money(e.amount) },
+    { header: "Receipt", render: (e) => <ReceiptLink path={e.receipt_path} /> },
     {
       header: "Status",
       align: "right",

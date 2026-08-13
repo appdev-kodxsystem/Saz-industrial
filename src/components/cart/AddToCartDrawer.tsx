@@ -15,7 +15,7 @@ type Line = { stockItemId: string; selling_price: string };
 
 const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR", maximumFractionDigits: 0 });
 const NEW = "__new__";
-const emptyLine = (): Line => ({ stockItemId: "", selling_price: "" });
+const emptyLine = (price = ""): Line => ({ stockItemId: "", selling_price: price });
 
 export function AddToCartDrawer() {
   const cart = useCart();
@@ -31,6 +31,9 @@ export function AddToCartDrawer() {
   const [contact, setContact] = useState("");
 
   const defaultSelling = product ? Number(product.selling_price) || Number(product.purchase_price) || 0 : 0;
+  // The product's list price prefills every new line, so the common case —
+  // "sell N of these at the usual price" — is zero typing.
+  const defaultPrice = defaultSelling > 0 ? String(defaultSelling) : "";
 
   function initForTarget(tid: string | null) {
     if (!product) return;
@@ -43,10 +46,7 @@ export function AddToCartDrawer() {
       stockItemId: u.stockItemId,
       selling_price: String(u.sellingPrice),
     }));
-    const fresh = (): Line => ({
-      ...emptyLine(),
-      selling_price: "",
-    });
+    const fresh = (): Line => emptyLine(defaultPrice);
     if (existing.length === 0) {
       setQuantity("1");
       setLines([fresh()]);
@@ -102,29 +102,47 @@ export function AddToCartDrawer() {
       if (prev.length === n) return prev;
       const next = prev.slice(0, n);
       while (next.length < n) {
-        next.push({ ...emptyLine(), selling_price: "" });
+        next.push(emptyLine(defaultPrice));
       }
       return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quantity]);
+  }, [quantity, defaultPrice]);
 
+  // Fill every line that has no unit on it yet with the next free one, oldest
+  // first. Ask for 5 and you get the 5 oldest units already chosen; each line's
+  // dropdown then lets you swap any of them for a different unit.
+  //
+  // This depends on `lines` as well as `available` — it used to watch only
+  // `available`, so raising the quantity added blank lines that nothing ever
+  // filled. Assignments are idempotent (an unchanged pass returns `prev`), so
+  // watching `lines` settles after one extra render rather than looping.
   useEffect(() => {
     if (!available.length) return;
     setLines((prev) => {
       const used = new Set(prev.map((l) => l.stockItemId).filter(Boolean));
       let changed = false;
       const next = prev.map((l) => {
-        if (l.stockItemId) return l;
+        // A unit that was picked up by another cart while this drawer was open
+        // is no longer ours to sell — drop it and take the next free one.
+        const stillAvailable = !!l.stockItemId && available.some((a) => a.id === l.stockItemId);
+        if (stillAvailable) return l;
+
         const free = available.find((a) => !used.has(a.id));
-        if (!free) return l;
-        used.add(free.id);
+        if (free) {
+          used.add(free.id);
+          changed = true;
+          return { ...l, stockItemId: free.id };
+        }
+        // Nothing left to give this line. Clear a stale id so the line reads as
+        // unfilled instead of pointing at a unit someone else is selling.
+        if (!l.stockItemId) return l;
         changed = true;
-        return { ...l, stockItemId: free.id };
+        return { ...l, stockItemId: "" };
       });
       return changed ? next : prev;
     });
-  }, [available]);
+  }, [available, lines]);
 
   if (!product) return null;
 
@@ -319,7 +337,24 @@ export function AddToCartDrawer() {
 
           {/* units */}
           <section className="space-y-2">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Units</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Units <span className="font-normal normal-case tracking-normal">· picked for you, swap any</span>
+              </h3>
+              {lines.length > 1 && lines[0].selling_price !== "" && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLines((prev) =>
+                      prev.map((l) => ({ ...l, selling_price: prev[0].selling_price })),
+                    )
+                  }
+                  className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition hover:text-foreground"
+                >
+                  Use first price for all
+                </button>
+              )}
+            </div>
             <div className="space-y-3">
               {lines.map((line, idx) => {
                 const opts = optionsFor(idx);

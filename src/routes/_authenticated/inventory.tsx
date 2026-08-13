@@ -1,12 +1,11 @@
-import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Plus, Search, X } from "lucide-react";
+import { PackagePlus, Plus, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   listProducts,
-  upsertProduct,
   adjustStock as adjustStockFn,
   togglePin as togglePinFn,
   deleteProduct as deleteProductFn,
@@ -14,10 +13,8 @@ import {
 } from "@/lib/inventory.functions";
 import { InventoryCard, stockStatusOf } from "@/components/inventory/InventoryCard";
 import { ProductDrawer } from "@/components/inventory/ProductDrawer";
-import AddProductDrawer from "@/components/inventory/AddProductDrawer";
-import AddStockDrawer from "@/components/inventory/AddStockDrawer";
 import { EmptyInventory, NoResults } from "@/components/inventory/EmptyState";
-import { PageHeader } from "@/components/inventory/AppNav";
+import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { useOrg } from "@/hooks/use-org";
 import { useCart } from "@/components/cart/cart-context";
 import {
@@ -58,16 +55,12 @@ const fmt = new Intl.NumberFormat("en-US", {
 function InventoryPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const router = useRouter();
-  void router;
-  void navigate;
 
   // Admins manage the catalogue; employees read it and sell from it. This only
   // decides what renders — the server functions and RLS enforce the same rule.
   const { isAdmin: canManage } = useOrg();
 
   const list = useServerFn(listProducts);
-  const upsert = useServerFn(upsertProduct);
   const adjust = useServerFn(adjustStockFn);
   const pin = useServerFn(togglePinFn);
   const remove = useServerFn(deleteProductFn);
@@ -110,10 +103,7 @@ function InventoryPage() {
   const [status, setStatus] = useState<StockFilter>("all");
   const [visible, setVisible] = useState(PAGE);
   const [openProduct, setOpenProduct] = useState<ProductRow | null>(null);
-  const [openAdd, setOpenAdd] = useState(false);
-  const [addStockProduct, setAddStockProduct] = useState<ProductRow | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [editingProduct, setEditingProduct] = useState<ProductRow | null>(null);
 
   const models = useMemo(
     () => Array.from(new Set(products.map((p) => p.category))).sort(),
@@ -150,19 +140,14 @@ function InventoryPage() {
     setStatus("all");
   };
 
-  const handleAdd = () => {
-    setEditingProduct(null);
-    setOpenAdd(true);
-  };
-  async function handleSaveProduct(payload: any) {
-    await upsert({ data: payload });
-    invalidate();
-  }
-
-  const handleEdit = (p: ProductRow) => {
-    setEditingProduct(p);
-    setOpenAdd(true);
-  };
+  // Creating a product, editing one and receiving stock are all full pages now
+  // rather than side drawers — they are multi-field jobs, and stock-in spans
+  // several products at once, which never fitted in a drawer bound to one.
+  const handleAdd = () => navigate({ to: "/products/new" });
+  const handleEdit = (p: ProductRow) =>
+    navigate({ to: "/products/$productId/edit", params: { productId: p.id } });
+  const handleAddStock = (p?: ProductRow) =>
+    navigate({ to: "/stock/new", search: p ? { product: p.id } : {} });
 
   const isEmpty = !isLoading && products.length === 0;
   const noResults = !isEmpty && filtered.length === 0 && !isLoading;
@@ -170,15 +155,26 @@ function InventoryPage() {
   return (
     <>
       <PageHeader
+        title="Inventory"
+        subtitle={`${products.length} product${products.length === 1 ? "" : "s"} in the catalogue`}
         actions={
           canManage ? (
-            <button
-              onClick={handleAdd}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition active:scale-95"
-            >
-              <Plus className="size-4" />
-              <span className="hidden sm:inline">Add Product</span>
-            </button>
+            <>
+              <button
+                onClick={() => handleAddStock()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-2 text-sm font-medium ring-1 ring-hairline transition hover:bg-accent active:scale-95"
+              >
+                <PackagePlus className="size-4" />
+                <span className="hidden sm:inline">Add Stock</span>
+              </button>
+              <button
+                onClick={handleAdd}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition active:scale-95"
+              >
+                <Plus className="size-4" />
+                <span className="hidden sm:inline">Add Product</span>
+              </button>
+            </>
           ) : undefined
         }
       >
@@ -229,7 +225,7 @@ function InventoryPage() {
         )}
       </PageHeader>
 
-      <main className="mx-auto max-w-7xl animate-in fade-in slide-in-from-bottom-3 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+      <PageBody>
         <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           <Kpi label="Total Products" value={kpis.total.toString()} />
           <Kpi label="Low Stock" value={kpis.low.toString()} tone="warning" />
@@ -249,7 +245,7 @@ function InventoryPage() {
           <>
             <div
               key={`${status}-${model}`}
-              className="grid animate-in fade-in grid-cols-1 gap-4 duration-300 ease-out sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 xl:grid-cols-4"
+              className="grid animate-in fade-in grid-cols-1 gap-4 duration-300 ease-out sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
             >
               {shown.map((p) => (
                 <InventoryCard
@@ -262,7 +258,7 @@ function InventoryPage() {
                   onTogglePin={(id, pinned) => pinMut.mutate({ id, pinned })}
                   onAddToCart={addToCart}
                   onEdit={handleEdit}
-                  onAddStock={(prod) => setAddStockProduct(prod)}
+                  onAddStock={handleAddStock}
                   onDelete={(id) => setDeleteId(id)}
                   reserved={cart.reservedQty(p.id)}
                 />
@@ -281,7 +277,7 @@ function InventoryPage() {
             )}
           </>
         )}
-      </main>
+      </PageBody>
 
       {/* Read-only detail view — employees open this to add to cart. */}
       <ProductDrawer
@@ -289,37 +285,13 @@ function InventoryPage() {
         open={!!openProduct}
         onOpenChange={(v) => !v && setOpenProduct(null)}
         onAddToCart={addToCart}
-        onAddStock={canManage ? (p) => setAddStockProduct(p) : undefined}
+        onAddStock={canManage ? handleAddStock : undefined}
       />
 
-      {/* Every product/stock write surface below is admin-only, so for an
-          employee it is never mounted at all — not merely hidden. */}
+      {/* Deleting a product is admin-only, so for an employee this dialog is
+          never mounted at all — not merely hidden. */}
       {canManage && (
         <>
-          <AddProductDrawer
-            open={openAdd}
-            onOpenChange={(v) => {
-              if (!v) {
-                setOpenAdd(false);
-                setEditingProduct(null);
-              } else {
-                setOpenAdd(true);
-              }
-            }}
-            onSave={handleSaveProduct}
-            initialCategories={models}
-            initialProduct={editingProduct}
-          />
-          <AddStockDrawer
-            product={addStockProduct}
-            open={!!addStockProduct}
-            onOpenChange={(v) => !v && setAddStockProduct(null)}
-            onAdded={async () => {
-              setAddStockProduct(null);
-              await invalidate();
-            }}
-          />
-
           <ConfirmDialog
             open={!!deleteId}
             onOpenChange={(v) => !v && !delMut.isPending && setDeleteId(null)}

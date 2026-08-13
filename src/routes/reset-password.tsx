@@ -4,7 +4,8 @@ import { useServerFn } from "@tanstack/react-start";
 import { Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { getMyOrg, markPasswordSet } from "@/lib/org.functions";
+import { useQueryClient } from "@tanstack/react-query";
+import { getMyOrg, markPasswordSet, MY_ORG_QUERY_KEY } from "@/lib/org.functions";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/reset-password")({
@@ -32,6 +33,7 @@ function hashSaysInvite() {
 function ResetPasswordPage() {
   const navigate = useNavigate();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const fetchOrg = useServerFn(getMyOrg);
   const confirmPasswordSet = useServerFn(markPasswordSet);
 
@@ -97,6 +99,11 @@ function ResetPasswordPage() {
         // beforeLoad to re-read the membership rather than reuse the cached
         // context that still says "no password".
         await confirmPasswordSet({ data: undefined });
+        // beforeLoad reads the membership through the query cache now, and
+        // router.invalidate() re-runs beforeLoad without touching that cache —
+        // so drop the stale "no password" entry first, or the guard reuses it
+        // and bounces them straight back here.
+        queryClient.removeQueries({ queryKey: MY_ORG_QUERY_KEY });
         await router.invalidate();
         toast.success("Welcome aboard! Your password is set.");
         navigate({ to: "/inventory", replace: true });

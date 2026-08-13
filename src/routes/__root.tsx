@@ -4,13 +4,13 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
-import { reportLovableError } from "../lib/lovable-error-reporting";
 
 function NotFoundComponent() {
   return (
@@ -37,9 +37,6 @@ function NotFoundComponent() {
 function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
-  useEffect(() => {
-    reportLovableError(error, { boundary: "tanstack_root_error_component" });
-  }, [error]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -50,6 +47,14 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <p className="mt-2 text-sm text-muted-foreground">
           Something went wrong on our end. You can try refreshing or head back home.
         </p>
+        {/* The actual reason, not just "something went wrong". beforeLoad throws
+            messages written to be read (an unapplied migration, a lost session);
+            swallowing them left a dead end with nothing to act on. */}
+        {error?.message && (
+          <p className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-surface p-3 text-left font-mono text-xs text-muted-foreground ring-1 ring-hairline">
+            {error.message}
+          </p>
+        )}
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {
@@ -77,18 +82,26 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Inventory Charm replaces traditional tables with responsive product cards for intuitive inventory management." },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Inventory Charm replaces traditional tables with responsive product cards for intuitive inventory management." },
+      { title: "SAZ Industrial" },
+      {
+        name: "description",
+        content: "Card-based inventory: track stock, sales, and profits in one tidy place.",
+      },
+      { name: "author", content: "SAZ Industrial" },
+      { property: "og:title", content: "SAZ Industrial" },
+      {
+        property: "og:description",
+        content: "Card-based inventory: track stock, sales, and profits in one tidy place.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
-      { name: "twitter:title", content: "Lovable App" },
-      { name: "twitter:description", content: "Inventory Charm replaces traditional tables with responsive product cards for intuitive inventory management." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/0f417645-9f46-450b-a705-cacce3191621/id-preview-aa38b05a--6760f5aa-a679-485c-854b-8b05991585e4.lovable.app-1780656598011.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/0f417645-9f46-450b-a705-cacce3191621/id-preview-aa38b05a--6760f5aa-a679-485c-854b-8b05991585e4.lovable.app-1780656598011.png" },
+      { name: "twitter:title", content: "SAZ Industrial" },
+      {
+        name: "twitter:description",
+        content: "Card-based inventory: track stock, sales, and profits in one tidy place.",
+      },
+      { property: "og:image", content: "/logo.png" },
+      { name: "twitter:image", content: "/logo.png" },
     ],
     links: [
       {
@@ -127,7 +140,9 @@ function RootShell({ children }: { children: ReactNode }) {
       <body>
         {/* Instant paint: the whole app is client-rendered (ssr:false), so this
             splash is the first contentful paint and the LCP element. RootComponent
-            removes it after React mounts. Inline styles only — no CSS dependency. */}
+            removes it once the router goes idle — not on mount, or it uncovers a
+            blank page while the first route is still loading. Inline styles only
+            — no CSS dependency. */}
         <div
           id="app-splash"
           style={{
@@ -164,14 +179,23 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
 
-  // Drop the instant-paint splash once the app has mounted.
+  // Drop the instant-paint splash once the router has actually settled — NOT
+  // merely once React has mounted.
+  //
+  // React mounts well before /_authenticated's beforeLoad resolves (a session
+  // check plus a getMyOrg() server call). Removing the splash on mount tore it
+  // away mid-load and left a blank background until the route was ready, which
+  // on a slow connection looked exactly like the app failing to render.
+  const routerStatus = useRouterState({ select: (s) => s.status });
+
   useEffect(() => {
+    if (routerStatus !== "idle") return;
     const el = document.getElementById("app-splash");
     if (!el) return;
     el.style.opacity = "0";
     const t = setTimeout(() => el.remove(), 300);
     return () => clearTimeout(t);
-  }, []);
+  }, [routerStatus]);
 
   useEffect(() => {
     let mounted = true;

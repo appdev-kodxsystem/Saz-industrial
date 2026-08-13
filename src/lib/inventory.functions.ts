@@ -106,9 +106,7 @@ export const adjustStock = createServerFn({ method: "POST" })
 
 export const togglePin = createServerFn({ method: "POST" })
   .middleware([requireOrgAdmin])
-  .inputValidator((d: unknown) =>
-    z.object({ id: z.string().uuid(), pinned: z.boolean() }).parse(d),
-  )
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid(), pinned: z.boolean() }).parse(d))
   .handler(async ({ context, data }) => {
     const { error } = await context.supabase
       .from("products")
@@ -168,34 +166,64 @@ export const deleteProduct = createServerFn({ method: "POST" })
 
 const DEMO = [
   {
-    name: "Apex Mitre Saw Pro X1", sku: "MS-402-B", category: "Power Tools",
+    name: "Apex Mitre Saw Pro X1",
+    sku: "MS-402-B",
+    category: "Power Tools",
     description: "Industrial-grade mitre saw with dual-bevel and integrated laser guide.",
-    stock: 48, reorder_at: 10, purchase_price: 312, selling_price: 499,
+    stock: 48,
+    reorder_at: 10,
+    purchase_price: 312,
+    selling_price: 499,
   },
   {
-    name: "Isotope Torque Wrench", sku: "TW-99", category: "Hand Tools",
+    name: "Isotope Torque Wrench",
+    sku: "TW-99",
+    category: "Hand Tools",
     description: "Calibrated click-style torque wrench with locking collar.",
-    stock: 4, reorder_at: 8, purchase_price: 62, selling_price: 124.5,
+    stock: 4,
+    reorder_at: 8,
+    purchase_price: 62,
+    selling_price: 124.5,
   },
   {
-    name: "Carbon Digital Calipers", sku: "CC-01", category: "Precision Instruments",
+    name: "Carbon Digital Calipers",
+    sku: "CC-01",
+    category: "Precision Instruments",
     description: "0-150mm carbon-fiber calipers with 0.01mm resolution.",
-    stock: 22, reorder_at: 6, purchase_price: 28, selling_price: 59,
+    stock: 22,
+    reorder_at: 6,
+    purchase_price: 28,
+    selling_price: 59,
   },
   {
-    name: "Helius Safety Goggles", sku: "HG-05", category: "Safety Equipment",
+    name: "Helius Safety Goggles",
+    sku: "HG-05",
+    category: "Safety Equipment",
     description: "ANSI Z87.1+ rated clear polycarbonate goggles.",
-    stock: 132, reorder_at: 20, purchase_price: 6, selling_price: 18,
+    stock: 132,
+    reorder_at: 20,
+    purchase_price: 6,
+    selling_price: 18,
   },
   {
-    name: "Flux Soldering Station", sku: "SX-200", category: "Electronics",
+    name: "Flux Soldering Station",
+    sku: "SX-200",
+    category: "Electronics",
     description: "60W digital soldering station, ESD-safe ceramic heater.",
-    stock: 9, reorder_at: 10, purchase_price: 84, selling_price: 169,
+    stock: 9,
+    reorder_at: 10,
+    purchase_price: 84,
+    selling_price: 169,
   },
   {
-    name: "Neon Laser Level", sku: "LL-12", category: "Precision Instruments",
+    name: "Neon Laser Level",
+    sku: "LL-12",
+    category: "Precision Instruments",
     description: "Self-leveling green-beam cross-line laser, IP65.",
-    stock: 17, reorder_at: 5, purchase_price: 110, selling_price: 229,
+    stock: 17,
+    reorder_at: 5,
+    purchase_price: 110,
+    selling_price: 229,
   },
 ];
 
@@ -219,7 +247,7 @@ export const seedDemoProducts = createServerFn({ method: "POST" })
 // fallback so non-table errors propagate exactly as before.
 function missingTableMessage(err: unknown, withOriginal = false): string | null {
   const msg = String((err as { message?: unknown })?.message ?? err);
-  for (const table of ["stock_items", "sales"] as const) {
+  for (const table of ["stock_items", "sales", "stock_orders"] as const) {
     if (msg.includes(`Could not find the table 'public.${table}'`)) {
       const base = `Missing DB table '${table}'. Run the migrations (see supabase/migrations) and redeploy or run \`supabase db push\`.`;
       return withOriginal ? `${base}\nOriginal: ${msg}` : base;
@@ -228,37 +256,225 @@ function missingTableMessage(err: unknown, withOriginal = false): string | null 
   return null;
 }
 
-// Stock item management: add individual stock entries, peek next available, and sell one
-const stockEntry = z.object({ manufacture_id: z.string().min(1).max(200), purchase_price: z.number().min(0).max(1_000_000) });
+// ---------------------------------------------------------------------------
+// Manufacture ids
+// ---------------------------------------------------------------------------
+// These used to be typed in by hand, one per unit, which was both the slowest
+// part of stocking in and the only field that could silently collide. They are
+// derived now: `<SKU>-0001`, `<SKU>-0002`, … per product.
+//
+// The next free number is read from the ids already on the product rather than
+// from a counter, so it survives deleted units, ids that were entered manually
+// before this change, and products whose SKU was renamed.
 
-export const addStockEntries = createServerFn({ method: "POST" })
+function mfrPrefix(sku: string | null): string {
+  const slug = (sku ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+  return slug || "UNIT";
+}
+
+async function nextManufactureIds(
+  supabase: any,
+  productId: string,
+  sku: string | null,
+  count: number,
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("stock_items")
+    .select("manufacture_id")
+    .eq("product_id", productId);
+  if (error) throw error;
+
+  const prefix = mfrPrefix(sku);
+  const taken = new Set<string>(
+    (data ?? []).map((r: { manufacture_id: string }) => r.manufacture_id),
+  );
+
+  // Continue from the highest number already issued under this prefix. Ids that
+  // don't match the pattern (hand-typed batch numbers) are ignored for the
+  // sequence but still counted as taken, so we can never re-issue one.
+  let seq = 0;
+  for (const id of taken) {
+    if (typeof id !== "string" || !id.startsWith(`${prefix}-`)) continue;
+    const n = Number(id.slice(prefix.length + 1));
+    if (Number.isInteger(n) && n > seq) seq = n;
+  }
+
+  const ids: string[] = [];
+  while (ids.length < count) {
+    seq += 1;
+    const candidate = `${prefix}-${String(seq).padStart(4, "0")}`;
+    if (taken.has(candidate)) continue;
+    taken.add(candidate);
+    ids.push(candidate);
+  }
+  return ids;
+}
+
+// ---------------------------------------------------------------------------
+// Stock orders — one supplier run, many products, one receipt
+// ---------------------------------------------------------------------------
+// A line prices its units one of two ways:
+//   purchase_price — every unit on the line cost the same (the common case)
+//   unit_prices    — one price per unit, for a batch bought at mixed rates
+// Exactly one of the two, and unit_prices must line up with quantity, so a line
+// can never be ambiguous about what a given unit cost.
+const stockOrderLine = z
+  .object({
+    productId: z.string().uuid(),
+    quantity: z.number().int().min(1).max(500),
+    purchase_price: z.number().min(0).max(1_000_000).optional(),
+    unit_prices: z.array(z.number().min(0).max(1_000_000)).min(1).max(500).optional(),
+  })
+  .refine((l) => (l.purchase_price === undefined) !== (l.unit_prices === undefined), {
+    message: "Provide either purchase_price or unit_prices, not both",
+  })
+  .refine((l) => !l.unit_prices || l.unit_prices.length === l.quantity, {
+    message: "unit_prices must have exactly one price per unit",
+  });
+
+/** The price of each individual unit on a line, however the line was priced. */
+function lineUnitPrices(line: {
+  quantity: number;
+  purchase_price?: number;
+  unit_prices?: number[];
+}): number[] {
+  return line.unit_prices ?? Array.from({ length: line.quantity }, () => line.purchase_price ?? 0);
+}
+
+export const createStockOrder = createServerFn({ method: "POST" })
   .middleware([requireOrgAdmin])
-  .inputValidator((d: unknown) => z.object({ productId: z.string().uuid(), entries: z.array(stockEntry).min(1) }).parse(d))
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        supplier: z.string().max(200).nullable().optional(),
+        note: z.string().max(2000).nullable().optional(),
+        // storage path inside the private `receipts` bucket, uploaded by the
+        // client before this call. Never a public URL.
+        receipt_path: z.string().max(500).nullable().optional(),
+        lines: z.array(stockOrderLine).min(1).max(50),
+      })
+      .parse(d),
+  )
   .handler(async ({ context, data }) => {
-    // snapshot product info + org_id so purchase history survives product deletion
-    const snap = await fetchProductSnapshot(context.supabase, data.productId);
-    const rows = data.entries.map((e) => ({
-      product_id: data.productId,
-      org_id: context.orgId,
-      user_id: context.userId,
-      product_name: snap.name,
-      product_sku: snap.sku,
-      product_image_url: snap.image_url,
-      manufacture_id: e.manufacture_id,
-      purchase_price: e.purchase_price,
-    }));
-    let inserted: StockItemRow[] | null = null;
+    const productIds = [...new Set(data.lines.map((l) => l.productId))];
+
+    // Snapshot product info so purchase history survives product deletion. The
+    // read is pinned to the caller's org, so a guessed id from another tenant
+    // simply isn't found.
+    const { data: prods, error: prodErr } = await context.supabase
+      .from("products")
+      .select("id, name, sku, image_url")
+      .in("id", productIds)
+      .eq("org_id", context.orgId);
+    if (prodErr) throw new Error(prodErr.message);
+    const prodById = new Map((prods ?? []).map((p) => [p.id, p]));
+    for (const id of productIds) {
+      if (!prodById.has(id)) throw new Error("A product in this order no longer exists");
+    }
+
+    // Resolve every line to a flat list of per-unit prices up front, so the
+    // uniform and per-unit cases are indistinguishable from here on.
+    const pricesByLine = data.lines.map(lineUnitPrices);
+    const unitCount = pricesByLine.reduce((n, p) => n + p.length, 0);
+    const totalCost = pricesByLine.reduce((n, p) => n + p.reduce((a, b) => a + b, 0), 0);
+
+    // Ids are generated per product across the WHOLE order, then handed out to
+    // the lines — otherwise two lines for the same product (say, two prices from
+    // the same supplier) would each start from the same number and collide.
+    const perProduct = new Map<string, number>();
+    for (const l of data.lines)
+      perProduct.set(l.productId, (perProduct.get(l.productId) ?? 0) + l.quantity);
+    const pools = new Map<string, string[]>();
     try {
-      const res = await context.supabase.from("stock_items").insert(rows).select();
-      inserted = res.data;
-      if (res.error) throw res.error;
+      await Promise.all(
+        [...perProduct].map(async ([pid, n]) => {
+          pools.set(
+            pid,
+            await nextManufactureIds(context.supabase, pid, prodById.get(pid)?.sku ?? null, n),
+          );
+        }),
+      );
     } catch (err: any) {
-      const hint = missingTableMessage(err);
+      const hint = missingTableMessage(err, true);
       if (hint) throw new Error(hint);
       throw new Error(err?.message || String(err));
     }
-    await applyStockDelta(context.supabase, data.productId, rows.length);
-    return { inserted: inserted ?? [] };
+
+    // 1. the order header
+    let orderId: string;
+    try {
+      const res = await context.supabase
+        .from("stock_orders")
+        .insert({
+          org_id: context.orgId,
+          user_id: context.userId,
+          supplier: data.supplier?.trim() || null,
+          note: data.note?.trim() || null,
+          receipt_path: data.receipt_path || null,
+          total_cost: totalCost,
+          unit_count: unitCount,
+        })
+        .select("id")
+        .single();
+      if (res.error) throw res.error;
+      orderId = res.data.id as string;
+    } catch (err: any) {
+      const hint = missingTableMessage(err, true);
+      if (hint) throw new Error(hint);
+      throw new Error(err?.message || String(err));
+    }
+
+    // 2. every unit in the order, in one insert
+    const rows = data.lines.flatMap((line, i) => {
+      const snap = prodById.get(line.productId)!;
+      const pool = pools.get(line.productId)!;
+      // One row per unit, each carrying its OWN price — a line bought at mixed
+      // rates stays accurate per unit, which is what the sale later reads back
+      // as the cost of the specific unit sold.
+      return pricesByLine[i].map((price) => ({
+        product_id: line.productId,
+        org_id: context.orgId,
+        user_id: context.userId,
+        order_id: orderId,
+        product_name: snap.name,
+        product_sku: snap.sku,
+        product_image_url: snap.image_url,
+        manufacture_id: pool.shift() as string,
+        purchase_price: price,
+      }));
+    });
+
+    let inserted: StockItemRow[] = [];
+    try {
+      const res = await context.supabase.from("stock_items").insert(rows).select();
+      if (res.error) throw res.error;
+      inserted = (res.data ?? []) as StockItemRow[];
+    } catch (err: any) {
+      // The header is worthless without its units — don't leave a phantom order
+      // (and a phantom total) in the purchase history.
+      await context.supabase
+        .from("stock_orders")
+        .delete()
+        .eq("id", orderId)
+        .eq("org_id", context.orgId);
+      const hint = missingTableMessage(err, true);
+      if (hint) throw new Error(hint);
+      throw new Error(err?.message || String(err));
+    }
+
+    // 3. bump each product's on-hand count. Distinct products are independent.
+    await Promise.all([...perProduct].map(([pid, n]) => applyStockDelta(context.supabase, pid, n)));
+
+    return {
+      orderId,
+      unitCount: inserted.length,
+      totalCost,
+      manufactureIds: inserted.map((it) => it.manufacture_id),
+    };
   });
 
 export const peekNextStockItem = createServerFn({ method: "GET" })
@@ -359,7 +575,9 @@ async function fetchProductSnapshot(
 
 export const sellOneFromStock = createServerFn({ method: "POST" })
   .middleware([requireOrgMember])
-  .inputValidator((d: unknown) => z.object({ productId: z.string().uuid(), ...salePaymentInput }).parse(d))
+  .inputValidator((d: unknown) =>
+    z.object({ productId: z.string().uuid(), ...salePaymentInput }).parse(d),
+  )
   .handler(async ({ context, data }) => {
     // find next stock item
     let next: StockItemRow | null = null;
@@ -449,6 +667,10 @@ export interface LedgerEntry {
   cost: number; // sale only: cost of the sold unit (0 for purchase rows).
   profit: number; // sale only.
   sold: boolean; // purchase rows: whether that stock unit has since been sold.
+  // purchase rows only: the stock order this unit arrived on, and the storage
+  // path of that order's receipt photo (private bucket — sign it to display).
+  order_id?: string | null;
+  receipt_path?: string | null;
 }
 
 // Unified activity ledger. Stock-in/purchase rows come from stock_items,
@@ -488,11 +710,15 @@ export const getLedger = createServerFn({ method: "GET" })
       context.supabase.from("products").select("id, name, sku"),
       context.supabase
         .from("stock_items")
-        .select("id, product_id, user_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at")
+        .select(
+          "id, product_id, user_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at",
+        )
         .eq("org_id", context.orgId),
       context.supabase
         .from("sales")
-        .select("id, product_id, user_id, product_name, product_sku, stock_item_id, selling_price, created_at")
+        .select(
+          "id, product_id, user_id, product_name, product_sku, stock_item_id, selling_price, created_at",
+        )
         .eq("org_id", context.orgId),
     ]);
 
@@ -511,7 +737,9 @@ export const getLedger = createServerFn({ method: "GET" })
     // Stock-in / purchases
     let stockItems: StockItemSel[] = [];
     if (stockRes.error) {
-      if (!String(stockRes.error.message).includes("Could not find the table 'public.stock_items'")) {
+      if (
+        !String(stockRes.error.message).includes("Could not find the table 'public.stock_items'")
+      ) {
         throw new Error(stockRes.error.message);
       }
     } else {
@@ -550,7 +778,7 @@ export const getLedger = createServerFn({ method: "GET" })
     for (const s of sales) {
       const p = s.product_id ? prodById.get(s.product_id) : undefined;
       const selling = Number(s.selling_price) || 0;
-      const cost = s.stock_item_id ? costById.get(s.stock_item_id) ?? 0 : 0;
+      const cost = s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
       entries.push({
         id: s.id,
         kind: "sale",
@@ -590,7 +818,8 @@ export const getProfitSeries = createServerFn({ method: "GET" })
 
     let sales: { selling_price: number; created_at: string; stock_item_id: string | null }[] = [];
     if (salesRes.error) {
-      if (String(salesRes.error.message).includes("Could not find the table 'public.sales'")) return [];
+      if (String(salesRes.error.message).includes("Could not find the table 'public.sales'"))
+        return [];
       throw new Error(salesRes.error.message);
     }
     sales = (salesRes.data ?? []) as typeof sales;
@@ -602,7 +831,7 @@ export const getProfitSeries = createServerFn({ method: "GET" })
     }
 
     return sales.map((s) => {
-      const cost = s.stock_item_id ? costById.get(s.stock_item_id) ?? 0 : 0;
+      const cost = s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
       const selling = Number(s.selling_price) || 0;
       return { created_at: s.created_at, selling_price: selling, cost, profit: selling - cost };
     });
@@ -635,7 +864,9 @@ export const getAvailableStockItems = createServerFn({ method: "GET" })
 
 export const sellStockItem = createServerFn({ method: "POST" })
   .middleware([requireOrgMember])
-  .inputValidator((d: unknown) => z.object({ stockItemId: z.string().uuid(), ...salePaymentInput }).parse(d))
+  .inputValidator((d: unknown) =>
+    z.object({ stockItemId: z.string().uuid(), ...salePaymentInput }).parse(d),
+  )
   .handler(async ({ context, data }) => {
     // mark item sold
     try {
@@ -738,7 +969,10 @@ export const sellStockItems = createServerFn({ method: "POST" })
       const productIds = [...new Set(items.map((it) => it.product_id as string))];
       const soldAt = new Date().toISOString();
       const [prodRes, flipRes] = await Promise.all([
-        context.supabase.from("products").select("id, name, sku, image_url, stock").in("id", productIds),
+        context.supabase
+          .from("products")
+          .select("id, name, sku, image_url, stock")
+          .in("id", productIds),
         context.supabase
           .from("stock_items")
           .update({ sold: true, sold_at: soldAt })
@@ -844,7 +1078,10 @@ export const listPendingPayments = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => z.object(pageInput).parse(d))
   .handler(async ({ context, data }): Promise<PagedPending> => {
     const { page, pageSize, search } = data;
-    const or = ilikeOrFilter(["product_name", "product_sku", "customer_name", "customer_contact"], search);
+    const or = ilikeOrFilter(
+      ["product_name", "product_sku", "customer_name", "customer_contact"],
+      search,
+    );
 
     type PendingSel = {
       id: string;
@@ -977,15 +1214,21 @@ export const listSalesPage = createServerFn({ method: "GET" })
     // products map, cost map, page rows, and aggregate are independent reads
     let pq = context.supabase
       .from("sales")
-      .select("id, product_id, product_name, product_sku, stock_item_id, selling_price, created_at", {
-        count: "exact",
-      })
+      .select(
+        "id, product_id, product_name, product_sku, stock_item_id, selling_price, created_at",
+        {
+          count: "exact",
+        },
+      )
       .eq("org_id", context.orgId);
     if (fromIso) pq = pq.gte("created_at", fromIso);
     if (or) pq = pq.or(or);
     pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
 
-    let aq = context.supabase.from("sales").select("selling_price, stock_item_id").eq("org_id", context.orgId);
+    let aq = context.supabase
+      .from("sales")
+      .select("selling_price, stock_item_id")
+      .eq("org_id", context.orgId);
     if (fromIso) aq = aq.gte("created_at", fromIso);
     if (or) aq = aq.or(or);
 
@@ -1019,7 +1262,7 @@ export const listSalesPage = createServerFn({ method: "GET" })
       if (aggRes.error) throw aggRes.error;
       for (const s of aggRes.data ?? []) {
         const selling = Number(s.selling_price) || 0;
-        const cost = s.stock_item_id ? costById.get(s.stock_item_id) ?? 0 : 0;
+        const cost = s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
         revenue += selling;
         profit += selling - cost;
       }
@@ -1037,7 +1280,7 @@ export const listSalesPage = createServerFn({ method: "GET" })
     const rows: LedgerEntry[] = pageRows.map((s) => {
       const live = s.product_id ? prodById.get(s.product_id) : undefined;
       const selling = Number(s.selling_price) || 0;
-      const cost = hideCost ? 0 : s.stock_item_id ? costById.get(s.stock_item_id) ?? 0 : 0;
+      const cost = hideCost ? 0 : s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
       return {
         id: s.id,
         kind: "sale",
@@ -1114,7 +1357,11 @@ export const getSaleDetail = createServerFn({ method: "GET" })
     // them together rather than back to back.
     const [prodRes, stockRes] = await Promise.all([
       sale.product_id
-        ? context.supabase.from("products").select("name, sku, image_url").eq("id", sale.product_id).maybeSingle()
+        ? context.supabase
+            .from("products")
+            .select("name, sku, image_url")
+            .eq("id", sale.product_id)
+            .maybeSingle()
         : Promise.resolve({ data: null, error: null } as const),
       sale.stock_item_id
         ? context.supabase
@@ -1128,7 +1375,11 @@ export const getSaleDetail = createServerFn({ method: "GET" })
     // live product (fresher name/sku/image) preferred over the snapshot
     let live: { name: string; sku: string; image_url: string | null } | undefined;
     if (!prodRes.error && prodRes.data) {
-      live = { name: prodRes.data.name, sku: prodRes.data.sku, image_url: prodRes.data.image_url ?? null };
+      live = {
+        name: prodRes.data.name,
+        sku: prodRes.data.sku,
+        image_url: prodRes.data.image_url ?? null,
+      };
     }
 
     // cost + manufacture id from the sold stock unit. Withheld from employees,
@@ -1185,20 +1436,25 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
       purchase_price: number;
       sold: boolean;
       created_at: string;
+      order_id: string | null;
     };
 
     // products map, page rows, and the filtered-set aggregate are independent
     let pq = context.supabase
       .from("stock_items")
-      .select("id, product_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at", {
-        count: "exact",
-      })
+      .select(
+        "id, product_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at, order_id",
+        { count: "exact" },
+      )
       .eq("org_id", context.orgId);
     if (fromIso) pq = pq.gte("created_at", fromIso);
     if (or) pq = pq.or(or);
     pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
 
-    let aq = context.supabase.from("stock_items").select("purchase_price, sold").eq("org_id", context.orgId);
+    let aq = context.supabase
+      .from("stock_items")
+      .select("purchase_price, sold")
+      .eq("org_id", context.orgId);
     if (fromIso) aq = aq.gte("created_at", fromIso);
     if (or) aq = aq.or(or);
 
@@ -1233,6 +1489,22 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
       throw new Error(err?.message || String(err));
     }
 
+    // Receipt photos hang off the order, not the unit. Only the orders on this
+    // page are looked up, so the extra round trip is bounded by pageSize.
+    const orderIds = [...new Set(pageRows.map((r) => r.order_id).filter(Boolean))] as string[];
+    const receiptByOrder = new Map<string, string | null>();
+    if (orderIds.length) {
+      const res = await context.supabase
+        .from("stock_orders")
+        .select("id, receipt_path")
+        .in("id", orderIds)
+        .eq("org_id", context.orgId);
+      // A missing stock_orders table only costs the receipt link, not the page.
+      if (!res.error) {
+        for (const o of res.data ?? []) receiptByOrder.set(o.id, o.receipt_path ?? null);
+      }
+    }
+
     const rows: LedgerEntry[] = pageRows.map((it) => {
       const live = it.product_id ? prodById.get(it.product_id) : undefined;
       return {
@@ -1247,10 +1519,16 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
         cost: 0,
         profit: 0,
         sold: Boolean(it.sold),
+        order_id: it.order_id,
+        receipt_path: it.order_id ? (receiptByOrder.get(it.order_id) ?? null) : null,
       };
     });
 
-    return { rows, total, stats: { count: total, revenue: 0, profit: 0, totalSpend, stillInStock } };
+    return {
+      rows,
+      total,
+      stats: { count: total, revenue: 0, profit: 0, totalSpend, stillInStock },
+    };
   });
 
 // Settle (fully or partially) a pending payment. Updates net_payment and

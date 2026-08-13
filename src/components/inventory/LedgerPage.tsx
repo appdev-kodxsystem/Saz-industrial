@@ -7,7 +7,7 @@ import {
   type LedgerEntry,
   type LedgerStats,
 } from "@/lib/inventory.functions";
-import { PageHeader } from "@/components/inventory/AppNav";
+import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { relativeTime } from "@/lib/relative-time";
 import { SearchBox, Pagination } from "@/components/inventory/TableControls";
 
@@ -143,7 +143,7 @@ export function LedgerPage({ config }: { config: LedgerConfig }) {
         </div>
       </PageHeader>
 
-      <main className="mx-auto max-w-7xl animate-in fade-in slide-in-from-bottom-3 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+      <PageBody>
         <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {config.kpis.map((k) => (
             <div
@@ -259,7 +259,7 @@ export function LedgerPage({ config }: { config: LedgerConfig }) {
             busy={isFetching}
           />
         </div>
-      </main>
+      </PageBody>
 
       {config.renderDetail?.({ entry: selected, open: detailOpen, onOpenChange: setDetailOpen })}
     </>

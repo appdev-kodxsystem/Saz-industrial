@@ -1,4 +1,14 @@
-import { Minus, Plus, MoreHorizontal, Pin, ShoppingCart, Eye, Pencil, Trash2, Package } from "lucide-react";
+import {
+  Minus,
+  Plus,
+  MoreHorizontal,
+  Pin,
+  ShoppingCart,
+  Eye,
+  Pencil,
+  Trash2,
+  Package,
+} from "lucide-react";
 import { StockBadge } from "./StockBadge";
 import { type ProductRow } from "@/lib/inventory.functions";
 import { supabaseThumb } from "@/lib/img";
@@ -58,7 +68,7 @@ export function InventoryCard({
         : "text-foreground";
 
   return (
-    <article className="group relative flex flex-col gap-4 rounded-3xl bg-surface p-4 ring-1 ring-hairline transition-all hover:shadow-xl hover:shadow-foreground/5 hover:-translate-y-0.5">
+    <article className="group relative flex h-full flex-col gap-4 rounded-3xl bg-surface p-4 ring-1 ring-hairline transition-all hover:shadow-xl hover:shadow-foreground/5 hover:-translate-y-0.5">
       <div
         role="button"
         tabIndex={0}
@@ -114,72 +124,91 @@ export function InventoryCard({
             <Pin className="size-3.5" />
           </button>
         )}
-
       </div>
 
+      {/* Every text field below is height-capped, and the stock/action block is
+          pushed to the bottom with mt-auto. Without both, a two-line product
+          name shunts that card's divider and buttons down relative to its
+          neighbours and the grid row stops lining up. */}
       <div className="flex flex-col gap-1">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="text-pretty text-sm font-semibold leading-tight">{product.name}</h3>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{product.sku}</span>
+          <h3 className="line-clamp-2 min-h-9 text-pretty text-sm font-semibold leading-tight">
+            {product.name}
+          </h3>
+          <span className="max-w-[38%] shrink-0 truncate font-mono text-[10px] text-muted-foreground">
+            {product.sku}
+          </span>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="line-clamp-1 text-xs text-muted-foreground">
           Model {product.category} • Updated {relativeUpdated}
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 border-y border-hairline py-3">
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Stock</span>
+      <div className="mt-auto flex flex-col gap-4">
+        <div className="flex flex-col gap-1 border-y border-hairline py-3">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Stock
+          </span>
           <div className="flex items-center gap-1.5">
-            <span className={`text-sm font-semibold tabular-nums ${stockTone}`}>{product.stock}</span>
+            <span className={`text-sm font-semibold tabular-nums ${stockTone}`}>
+              {product.stock}
+            </span>
             {inCart > 0 && (
-              <span className="text-[10px] font-medium text-muted-foreground">({inCart} in cart)</span>
+              <span className="text-[10px] font-medium text-muted-foreground">
+                ({inCart} in cart)
+              </span>
             )}
           </div>
         </div>
 
-      </div>
-
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={() => onAddToCart(product)}
-          disabled={freeToAdd <= 0}
-          title={freeToAdd <= 0 && product.stock > 0 ? "All units are in a cart" : undefined}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <ShoppingCart className="size-3.5" />
-          Add to Cart
-        </button>
-        <button type="button" onClick={() => onOpen(product)} aria-label="View details"
-          className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent">
-          <Eye className="size-4" />
-        </button>
-        {/* Edit / Add Stock / Delete are the three product-and-stock writes.
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onAddToCart(product)}
+            disabled={freeToAdd <= 0}
+            title={freeToAdd <= 0 && product.stock > 0 ? "All units are in a cart" : undefined}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ShoppingCart className="size-3.5" />
+            Add to Cart
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpen(product)}
+            aria-label="View details"
+            className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
+          >
+            <Eye className="size-4" />
+          </button>
+          {/* Edit / Add Stock / Delete are the three product-and-stock writes.
             The whole menu goes away for an employee — there is nothing left in
             it they are allowed to do. */}
-        {canManage && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              aria-label="More actions"
-              className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
-            >
-              <MoreHorizontal className="size-4" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onClick={() => onEdit(product)}>
-                <Pencil className="size-4" /> Edit Product
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onAddStock(product)}>
-                <Plus className="size-4" /> Add Stock
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onDelete(product.id)} className="text-destructive focus:text-destructive">
-                <Trash2 className="size-4" /> Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+          {canManage && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="More actions"
+                className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
+              >
+                <MoreHorizontal className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={() => onEdit(product)}>
+                  <Pencil className="size-4" /> Edit Product
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onAddStock(product)}>
+                  <Plus className="size-4" /> Add Stock
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onDelete(product.id)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="size-4" /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
     </article>
   );

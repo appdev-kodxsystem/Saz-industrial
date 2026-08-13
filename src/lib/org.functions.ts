@@ -1,7 +1,11 @@
 import process from "node:process";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireOrgAdmin, requireOrgMember } from "@/integrations/supabase/org-middleware";
+import {
+  invalidateAllMemberships,
+  requireOrgAdmin,
+  requireOrgMember,
+} from "@/integrations/supabase/org-middleware";
 import type { OrgRole } from "@/integrations/supabase/org-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
@@ -40,6 +44,18 @@ export interface MyOrg {
   /** Whether the CALLER is the org's owner. */
   isOwner: boolean;
 }
+
+/**
+ * Cache key for {@link getMyOrg}.
+ *
+ * The /_authenticated beforeLoad reads the org through the query client rather
+ * than calling the server function directly, so that navigating between pages
+ * reuses the answer instead of re-fetching it on every single route change.
+ * Anything that changes the caller's own membership — notably setting a password
+ * for the first time — must invalidate this key, because `router.invalidate()`
+ * alone re-runs beforeLoad but does not touch the query cache.
+ */
+export const MY_ORG_QUERY_KEY = ["my-org"] as const;
 
 /**
  * The caller's organization and their role in it. Read once by the
@@ -246,6 +262,9 @@ export const updateMemberRole = createServerFn({ method: "POST" })
       p_role: data.role,
     });
     if (error) throw new Error(error.message);
+    // The middleware caches roles for a few seconds; without this the demoted
+    // admin would keep passing requireOrgAdmin until the TTL lapsed.
+    invalidateAllMemberships();
     return { ok: true };
   });
 
@@ -274,6 +293,10 @@ export const removeMember = createServerFn({ method: "POST" })
       p_member_id: data.memberId,
     });
     if (error) throw new Error(error.message);
+
+    // Their cached membership must go with them, or they keep passing the
+    // middleware until the TTL lapses.
+    invalidateAllMemberships();
 
     // NULL means the row was a never-claimed invite — there is no account to
     // delete, and removing the membership row was the whole job.

@@ -167,6 +167,9 @@ export type Database = {
           product_id: string | null
           org_id: string
           user_id: string | null
+          // The stock order this unit arrived on. NULL for units added before
+          // ordering existed, or if the order row was later deleted.
+          order_id: string | null
           product_name: string | null
           product_sku: string | null
           product_image_url: string | null
@@ -181,6 +184,7 @@ export type Database = {
           product_id?: string | null
           org_id: string
           user_id?: string | null
+          order_id?: string | null
           product_name?: string | null
           product_sku?: string | null
           product_image_url?: string | null
@@ -195,6 +199,7 @@ export type Database = {
           product_id?: string | null
           org_id?: string
           user_id?: string | null
+          order_id?: string | null
           product_name?: string | null
           product_sku?: string | null
           product_image_url?: string | null
@@ -203,6 +208,43 @@ export type Database = {
           sold?: boolean
           created_at?: string
           sold_at?: string | null
+        }
+        Relationships: []
+      }
+      stock_orders: {
+        Row: {
+          id: string
+          org_id: string
+          user_id: string | null
+          supplier: string | null
+          note: string | null
+          // Storage path inside the private `receipts` bucket — sign it to read.
+          receipt_path: string | null
+          total_cost: number
+          unit_count: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          user_id?: string | null
+          supplier?: string | null
+          note?: string | null
+          receipt_path?: string | null
+          total_cost?: number
+          unit_count?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          user_id?: string | null
+          supplier?: string | null
+          note?: string | null
+          receipt_path?: string | null
+          total_cost?: number
+          unit_count?: number
+          created_at?: string
         }
         Relationships: []
       }

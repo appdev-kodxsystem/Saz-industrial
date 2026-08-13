@@ -25,7 +25,7 @@ import {
   type OrgMember,
 } from "@/lib/org.functions";
 import type { OrgRole } from "@/integrations/supabase/org-middleware";
-import { PageHeader } from "@/components/inventory/AppNav";
+import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { useOrg } from "@/hooks/use-org";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -165,7 +165,7 @@ function OrganizationPage() {
     <>
       <PageHeader title="Organization" subtitle="Settings, members and roles" />
 
-      <main className="mx-auto flex max-w-4xl animate-in fade-in slide-in-from-bottom-3 flex-col gap-6 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+      <PageBody className="flex flex-col gap-6">
         {/* ---- General ------------------------------------------------- */}
         <section className="rounded-3xl bg-surface p-5 ring-1 ring-hairline sm:p-6">
           <div className="mb-4 flex items-center gap-2">
@@ -339,7 +339,7 @@ function OrganizationPage() {
             </ul>
           )}
         </section>
-      </main>
+      </PageBody>
 
       <ConfirmDialog
         open={!!removing}

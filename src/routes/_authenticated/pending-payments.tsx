@@ -9,7 +9,7 @@ import {
   settlePayment,
   type PendingPaymentRow,
 } from "@/lib/inventory.functions";
-import { PageHeader } from "@/components/inventory/AppNav";
+import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { SearchBox, Pagination } from "@/components/inventory/TableControls";
 
 const PAGE_SIZE = 10;
@@ -102,7 +102,7 @@ function PendingPaymentsPage() {
         subtitle="Sold items with an outstanding balance"
       />
 
-      <main className="mx-auto max-w-7xl animate-in fade-in slide-in-from-bottom-3 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+      <PageBody>
         <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
           <Kpi label="Pending Records" value={String(kpis.count)} />
           <Kpi label="Outstanding" value={money(kpis.outstanding)} tone="danger" />
@@ -254,7 +254,7 @@ function PendingPaymentsPage() {
             busy={isFetching}
           />
         )}
-      </main>
+      </PageBody>
 
       <SettleDialog
         record={active}

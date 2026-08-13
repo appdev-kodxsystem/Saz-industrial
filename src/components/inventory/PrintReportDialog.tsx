@@ -3,8 +3,11 @@ import type { DateRange } from "react-day-picker";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { FileDown, Loader2 } from "lucide-react";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
+// jspdf + jspdf-autotable are ~400KB of JavaScript that is only ever needed
+// once someone actually clicks Export. Imported statically they were part of the
+// Reports page bundle, so every visit to Reports downloaded and parsed a PDF
+// engine before the page could render. They are imported dynamically inside
+// downloadPdf() instead — see below.
 import {
   Dialog,
   DialogContent,
@@ -63,6 +66,14 @@ async function loadLogo(): Promise<{ data: string; w: number; h: number } | null
 
 // Generates and downloads a branded PDF report for the selected period.
 async function downloadPdf(entries: LedgerEntry[], from: Date, to: Date) {
+  // Pulled in on demand; the click that gets here is already an explicit,
+  // clearly-async action, so the extra fetch is invisible next to generating the
+  // document itself.
+  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+    import("jspdf"),
+    import("jspdf-autotable"),
+  ]);
+
   const fromMs = startOfDay(from);
   const toMs = endOfDay(to);
   const inRange = entries.filter((e) => {

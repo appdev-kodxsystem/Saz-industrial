@@ -16,7 +16,7 @@ import {
   Legend,
 } from "recharts";
 import { getProfitSeries, type ProfitSaleRow } from "@/lib/inventory.functions";
-import { PageHeader } from "@/components/inventory/AppNav";
+import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { PrintReportDialog } from "@/components/inventory/PrintReportDialog";
 
 export const Route = createFileRoute("/_authenticated/reports")({
@@ -210,7 +210,7 @@ function ReportsPage() {
         </div>
       </PageHeader>
 
-      <main className="mx-auto max-w-7xl animate-in fade-in slide-in-from-bottom-3 px-4 py-6 duration-500 ease-out sm:px-6 lg:py-10">
+      <PageBody>
         <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           <Kpi label="Revenue" value={fmt.format(totals.revenue)} />
           <Kpi label="Cost" value={fmt.format(totals.cost)} />
@@ -317,7 +317,7 @@ function ReportsPage() {
             No sales recorded in this period yet. Sell stock to populate reports.
           </p>
         )}
-      </main>
+      </PageBody>
     </>
   );
 }
