@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireOrgAdmin, requireOrgMember } from "@/integrations/supabase/org-middleware";
+import { missingAddonTableMessage } from "@/lib/addons.functions";
 import type { Tables } from "@/integrations/supabase/types";
 
 type StockItemRow = Tables<"stock_items">;
@@ -314,6 +315,62 @@ async function nextManufactureIds(
   return ids;
 }
 
+// Batch codes, issued the same way manufacture ids are: `<CODE>-B0001`, per
+// add-on, continuing from the highest number already used.
+//
+// The addon_batch_defaults trigger can do this too, and still does for anything
+// that inserts a batch directly. But it cannot do it for a MULTI-ROW insert: a
+// BEFORE INSERT trigger's SELECT runs against the statement's snapshot, so rows
+// inserted earlier in the same statement are invisible to it and every row
+// computes the same next number — which the unique index on
+// (addon_id, batch_code) then rejects. That case became reachable the moment one
+// add-on line could split into several batches (per-unit pricing), so the codes
+// are allocated here, up front, and passed in explicitly.
+function batchPrefix(code: string | null): string {
+  const slug = (code ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+  return slug || "ADDON";
+}
+
+async function nextBatchCodes(
+  supabase: any,
+  addonId: string,
+  code: string | null,
+  count: number,
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("addon_stock_batches")
+    .select("batch_code")
+    .eq("addon_id", addonId);
+  if (error) throw error;
+
+  const prefix = batchPrefix(code);
+  const taken = new Set<string>((data ?? []).map((r: { batch_code: string }) => r.batch_code));
+
+  // Continue from the highest number already issued under this prefix. Codes
+  // that don't match the pattern still count as taken, so one can never be
+  // re-issued.
+  let seq = 0;
+  for (const bc of taken) {
+    if (typeof bc !== "string" || !bc.startsWith(`${prefix}-B`)) continue;
+    const n = Number(bc.slice(prefix.length + 2));
+    if (Number.isInteger(n) && n > seq) seq = n;
+  }
+
+  const out: string[] = [];
+  while (out.length < count) {
+    seq += 1;
+    const candidate = `${prefix}-B${String(seq).padStart(4, "0")}`;
+    if (taken.has(candidate)) continue;
+    taken.add(candidate);
+    out.push(candidate);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Stock orders — one supplier run, many products, one receipt
 // ---------------------------------------------------------------------------
@@ -345,6 +402,20 @@ function lineUnitPrices(line: {
   return line.unit_prices ?? Array.from({ length: line.quantity }, () => line.purchase_price ?? 0);
 }
 
+// An add-on line on the same supplier run. Add-ons are bulk consumables with no
+// serial number, so a line is ONE batch — a lot received at one price — rather
+// than N unit rows.
+//
+// Per-unit pricing on the client therefore arrives here already collapsed: a
+// line whose units cost 14, 14 and 16 is sent as two entries (qty 2 @ 14, qty 1
+// @ 16), because that is what those units genuinely are. The same add-on may
+// appear on several entries, which is why the cap below is generous.
+const addonOrderLine = z.object({
+  addonId: z.string().uuid(),
+  quantity: z.number().int().min(1).max(100_000),
+  unit_cost: z.number().min(0).max(1_000_000),
+});
+
 export const createStockOrder = createServerFn({ method: "POST" })
   .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) =>
@@ -355,7 +426,15 @@ export const createStockOrder = createServerFn({ method: "POST" })
         // storage path inside the private `receipts` bucket, uploaded by the
         // client before this call. Never a public URL.
         receipt_path: z.string().max(500).nullable().optional(),
-        lines: z.array(stockOrderLine).min(1).max(50),
+        // Either side may be empty — an order can be machines only, add-ons
+        // only, or both — but an order with nothing on it is not an order.
+        lines: z.array(stockOrderLine).max(50).default([]),
+        // Higher than `lines` because one add-on priced per unit expands into
+        // one entry per distinct price before it gets here.
+        addonLines: z.array(addonOrderLine).max(300).default([]),
+      })
+      .refine((d) => d.lines.length + d.addonLines.length > 0, {
+        message: "An order needs at least one machinery or add-on line",
       })
       .parse(d),
   )
@@ -376,11 +455,38 @@ export const createStockOrder = createServerFn({ method: "POST" })
       if (!prodById.has(id)) throw new Error("A product in this order no longer exists");
     }
 
+    // Same check for the add-on side. Pinned to the caller's org, so an id
+    // guessed from another tenant simply isn't found.
+    const addonIds = [...new Set(data.addonLines.map((l) => l.addonId))];
+    const addonById = new Map<string, { id: string; name: string; code: string }>();
+    if (addonIds.length) {
+      const { data: addons, error: addonErr } = await context.supabase
+        .from("addons")
+        .select("id, name, code")
+        .in("id", addonIds)
+        .eq("org_id", context.orgId);
+      if (addonErr) {
+        const hint = missingAddonTableMessage(addonErr);
+        throw new Error(hint ?? addonErr.message);
+      }
+      for (const a of addons ?? []) addonById.set(a.id, a as any);
+      for (const id of addonIds) {
+        if (!addonById.has(id)) throw new Error("An add-on in this order no longer exists");
+      }
+    }
+
     // Resolve every line to a flat list of per-unit prices up front, so the
     // uniform and per-unit cases are indistinguishable from here on.
     const pricesByLine = data.lines.map(lineUnitPrices);
     const unitCount = pricesByLine.reduce((n, p) => n + p.length, 0);
     const totalCost = pricesByLine.reduce((n, p) => n + p.reduce((a, b) => a + b, 0), 0);
+
+    // Kept apart from the machinery totals on purpose: total_cost / unit_count
+    // keep their existing machinery-only meaning, so the Purchases page can
+    // still answer "what did we spend on machinery" without add-ons quietly
+    // inflating the number.
+    const addonUnitCount = data.addonLines.reduce((n, l) => n + l.quantity, 0);
+    const addonCost = data.addonLines.reduce((n, l) => n + l.quantity * l.unit_cost, 0);
 
     // Ids are generated per product across the WHOLE order, then handed out to
     // the lines — otherwise two lines for the same product (say, two prices from
@@ -417,6 +523,8 @@ export const createStockOrder = createServerFn({ method: "POST" })
           receipt_path: data.receipt_path || null,
           total_cost: totalCost,
           unit_count: unitCount,
+          addon_cost: addonCost,
+          addon_unit_count: addonUnitCount,
         })
         .select("id")
         .single();
@@ -448,31 +556,112 @@ export const createStockOrder = createServerFn({ method: "POST" })
       }));
     });
 
-    let inserted: StockItemRow[] = [];
-    try {
-      const res = await context.supabase.from("stock_items").insert(rows).select();
-      if (res.error) throw res.error;
-      inserted = (res.data ?? []) as StockItemRow[];
-    } catch (err: any) {
-      // The header is worthless without its units — don't leave a phantom order
-      // (and a phantom total) in the purchase history.
+    // The header is worthless without the stock it claims to have brought in —
+    // don't leave a phantom order (and a phantom total) in the purchase history.
+    const abandonOrder = async () => {
       await context.supabase
         .from("stock_orders")
         .delete()
         .eq("id", orderId)
         .eq("org_id", context.orgId);
-      const hint = missingTableMessage(err, true);
-      if (hint) throw new Error(hint);
-      throw new Error(err?.message || String(err));
+    };
+
+    let inserted: StockItemRow[] = [];
+    if (rows.length) {
+      try {
+        const res = await context.supabase.from("stock_items").insert(rows).select();
+        if (res.error) throw res.error;
+        inserted = (res.data ?? []) as StockItemRow[];
+      } catch (err: any) {
+        await abandonOrder();
+        const hint = missingTableMessage(err, true);
+        if (hint) throw new Error(hint);
+        throw new Error(err?.message || String(err));
+      }
     }
 
-    // 3. bump each product's on-hand count. Distinct products are independent.
+    // 3. the add-on batches on this order. One row per line: `remaining` starts
+    // at `quantity`, and the batch code (TK-01-B0001, …) is issued by a trigger
+    // that locks the catalogue row first, so two admins stocking in the same
+    // add-on at the same moment queue up instead of colliding.
+    let addonBatches = 0;
+    if (data.addonLines.length) {
+      // Codes are allocated per add-on across the WHOLE order before anything is
+      // written, then handed out to the lines — otherwise two entries for the
+      // same add-on (two prices from the same supplier) would each compute the
+      // same next number and collide on the unique index. See nextBatchCodes.
+      const linesPerAddon = new Map<string, number>();
+      for (const l of data.addonLines) {
+        linesPerAddon.set(l.addonId, (linesPerAddon.get(l.addonId) ?? 0) + 1);
+      }
+      const codePools = new Map<string, string[]>();
+      try {
+        await Promise.all(
+          [...linesPerAddon].map(async ([aid, n]) => {
+            codePools.set(
+              aid,
+              await nextBatchCodes(context.supabase, aid, addonById.get(aid)?.code ?? null, n),
+            );
+          }),
+        );
+      } catch (err: any) {
+        await abandonOrder();
+        const hint = missingAddonTableMessage(err);
+        throw new Error(hint ?? err?.message ?? String(err));
+      }
+
+      const batchRows = data.addonLines.map((l) => {
+        const snap = addonById.get(l.addonId)!;
+        return {
+          addon_id: l.addonId,
+          org_id: context.orgId,
+          user_id: context.userId,
+          order_id: orderId,
+          addon_name: snap.name,
+          addon_code: snap.code,
+          batch_code: codePools.get(l.addonId)!.shift() as string,
+          quantity: l.quantity,
+          remaining: l.quantity,
+          unit_cost: l.unit_cost,
+        };
+      });
+      try {
+        const res = await context.supabase
+          .from("addon_stock_batches")
+          .insert(batchRows)
+          .select("id");
+        if (res.error) throw res.error;
+        addonBatches = (res.data ?? []).length;
+      } catch (err: any) {
+        // Roll the whole order back, machinery included: a half-recorded order
+        // is worse than none, because its totals would be wrong forever.
+        if (inserted.length) {
+          await context.supabase
+            .from("stock_items")
+            .delete()
+            .in(
+              "id",
+              inserted.map((it) => it.id),
+            );
+        }
+        await abandonOrder();
+        const hint = missingAddonTableMessage(err);
+        throw new Error(hint ?? err?.message ?? String(err));
+      }
+    }
+
+    // 4. bump each product's on-hand count. Distinct products are independent.
+    // Add-ons have no such counter — their on-hand is derived from the batches
+    // by the addon_stock_levels view, so there is nothing here to keep in step.
     await Promise.all([...perProduct].map(([pid, n]) => applyStockDelta(context.supabase, pid, n)));
 
     return {
       orderId,
       unitCount: inserted.length,
       totalCost,
+      addonUnitCount,
+      addonCost,
+      addonBatches,
       manufactureIds: inserted.map((it) => it.manufacture_id),
     };
   });
@@ -556,6 +745,37 @@ async function applyStockDelta(supabase: any, productId: string, delta: number):
   return (data as number) ?? 0;
 }
 
+/**
+ * sale_id → what the add-ons handed out with that sale cost the organization.
+ *
+ * This is the number that turns profit from `selling - cost` into
+ * `selling - cost - addon_cost`. It is read from the sale_addon_totals view,
+ * which only has a row for sales that actually carried add-ons, so the map is
+ * small even on a long ledger.
+ *
+ * A failed read degrades to "no add-ons" rather than breaking the page: on a
+ * deploy that has not run the add-on migration yet, every sale correctly has
+ * zero add-on cost anyway.
+ */
+async function addonCostBySale(
+  supabase: any,
+  orgId: string,
+): Promise<Map<string, { cost: number; units: number }>> {
+  const map = new Map<string, { cost: number; units: number }>();
+  const { data, error } = await supabase
+    .from("sale_addon_totals")
+    .select("sale_id, addon_cost, addon_units")
+    .eq("org_id", orgId);
+  if (error) return map;
+  for (const r of data ?? []) {
+    map.set(r.sale_id as string, {
+      cost: Number(r.addon_cost) || 0,
+      units: Number(r.addon_units) || 0,
+    });
+  }
+  return map;
+}
+
 // Fetch the product fields snapshotted onto a sale. Returns nulls if absent.
 async function fetchProductSnapshot(
   supabase: any,
@@ -571,6 +791,48 @@ async function fetchProductSnapshot(
     sku: data?.sku ?? null,
     image_url: data?.image_url ?? null,
   };
+}
+
+// Attach the free add-ons chosen at the till to the sale rows just written.
+//
+// One RPC for the whole cart rather than one per line: addon_attach_bulk runs
+// the lot inside a single transaction, so either every add-on on the cart lands
+// or none of them do, and there is no window where half a cart's giveaways have
+// been taken out of stock.
+//
+// A failure here does NOT fail the sale. The sale is already recorded and is
+// complete on its own terms — the customer paid for the machine, not for the
+// giveaway. Throwing would tell the till that a sale which actually happened had
+// failed, which is the worse error. The caller gets `addonWarning` to show.
+async function attachCartAddons(
+  supabase: any,
+  items: { stockItemId: string; addons?: { addonId: string; qty: number }[] }[],
+  sales: SaleRow[],
+): Promise<{ addonCost: number; addonWarning: string | null }> {
+  const saleByStockItem = new Map<string, string>();
+  for (const s of sales) {
+    if (s.stock_item_id) saleByStockItem.set(s.stock_item_id, s.id);
+  }
+
+  const lines: { sale_id: string; addon_id: string; qty: number }[] = [];
+  for (const it of items) {
+    if (!it.addons?.length) continue;
+    const saleId = saleByStockItem.get(it.stockItemId);
+    if (!saleId) continue;
+    for (const a of it.addons) {
+      lines.push({ sale_id: saleId, addon_id: a.addonId, qty: a.qty });
+    }
+  }
+  if (!lines.length) return { addonCost: 0, addonWarning: null };
+
+  const { data, error } = await supabase.rpc("addon_attach_bulk", { p_lines: lines });
+  if (error) {
+    return {
+      addonCost: 0,
+      addonWarning: missingAddonTableMessage(error) ?? error.message,
+    };
+  }
+  return { addonCost: Number(data) || 0, addonWarning: null };
 }
 
 export const sellOneFromStock = createServerFn({ method: "POST" })
@@ -665,12 +927,20 @@ export interface LedgerEntry {
   reference: string;
   amount: number; // purchase: purchase_price. sale: selling_price.
   cost: number; // sale only: cost of the sold unit (0 for purchase rows).
-  profit: number; // sale only.
+  profit: number; // sale only, NET of any add-ons given away with it.
   sold: boolean; // purchase rows: whether that stock unit has since been sold.
   // purchase rows only: the stock order this unit arrived on, and the storage
   // path of that order's receipt photo (private bucket — sign it to display).
   order_id?: string | null;
   receipt_path?: string | null;
+  // sale rows: what the add-ons handed over with this unit cost the org. Already
+  // subtracted from `profit` — carried separately so the ledger can show it.
+  addon_cost?: number;
+  addon_units?: number;
+  // purchase rows: which stream the row came from. Machinery is one row per
+  // unit (stock_items); an add-on row is one batch (addon_stock_batches).
+  stream?: "machinery" | "addon";
+  quantity?: number;
 }
 
 // Unified activity ledger. Stock-in/purchase rows come from stock_items,
@@ -706,7 +976,7 @@ export const getLedger = createServerFn({ method: "GET" })
 
     // products, stock_items and sales are independent reads — fire them together
     // so we pay one round trip of latency instead of three.
-    const [prodRes, stockRes, salesRes] = await Promise.all([
+    const [prodRes, stockRes, salesRes, addonBySale] = await Promise.all([
       context.supabase.from("products").select("id, name, sku"),
       context.supabase
         .from("stock_items")
@@ -720,6 +990,7 @@ export const getLedger = createServerFn({ method: "GET" })
           "id, product_id, user_id, product_name, product_sku, stock_item_id, selling_price, created_at",
         )
         .eq("org_id", context.orgId),
+      addonCostBySale(context.supabase, context.orgId),
     ]);
 
     if (prodRes.error) throw new Error(prodRes.error.message);
@@ -779,6 +1050,8 @@ export const getLedger = createServerFn({ method: "GET" })
       const p = s.product_id ? prodById.get(s.product_id) : undefined;
       const selling = Number(s.selling_price) || 0;
       const cost = s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
+      const addon = addonBySale.get(s.id);
+      const addonCost = addon?.cost ?? 0;
       entries.push({
         id: s.id,
         kind: "sale",
@@ -791,8 +1064,10 @@ export const getLedger = createServerFn({ method: "GET" })
         reference: s.stock_item_id ?? "—",
         amount: selling,
         cost,
-        profit: selling - cost,
+        profit: selling - cost - addonCost,
         sold: true,
+        addon_cost: addonCost,
+        addon_units: addon?.units ?? 0,
       });
     }
 
@@ -806,17 +1081,23 @@ export const getLedger = createServerFn({ method: "GET" })
 export const getProfitSeries = createServerFn({ method: "GET" })
   .middleware([requireOrgAdmin])
   .handler(async ({ context }): Promise<ProfitSaleRow[]> => {
-    // sales + cost map are independent — fetch in parallel (one round trip)
-    const [salesRes, costRes] = await Promise.all([
+    // sales, cost map and add-on totals are independent — fetch in parallel
+    const [salesRes, costRes, addonBySale] = await Promise.all([
       context.supabase
         .from("sales")
-        .select("selling_price, created_at, stock_item_id")
+        .select("id, selling_price, created_at, stock_item_id")
         .eq("org_id", context.orgId)
         .order("created_at", { ascending: true }),
       context.supabase.from("stock_items").select("id, purchase_price").eq("org_id", context.orgId),
+      addonCostBySale(context.supabase, context.orgId),
     ]);
 
-    let sales: { selling_price: number; created_at: string; stock_item_id: string | null }[] = [];
+    let sales: {
+      id: string;
+      selling_price: number;
+      created_at: string;
+      stock_item_id: string | null;
+    }[] = [];
     if (salesRes.error) {
       if (String(salesRes.error.message).includes("Could not find the table 'public.sales'"))
         return [];
@@ -830,10 +1111,18 @@ export const getProfitSeries = createServerFn({ method: "GET" })
       for (const row of costRes.data ?? []) costById.set(row.id, Number(row.purchase_price) || 0);
     }
 
+    // Profit is net of the add-ons given away with each sale, so every chart on
+    // Reports agrees with the Sales ledger instead of running slightly rich.
     return sales.map((s) => {
       const cost = s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
+      const addon = addonBySale.get(s.id)?.cost ?? 0;
       const selling = Number(s.selling_price) || 0;
-      return { created_at: s.created_at, selling_price: selling, cost, profit: selling - cost };
+      return {
+        created_at: s.created_at,
+        selling_price: selling,
+        cost: cost + addon,
+        profit: selling - cost - addon,
+      };
     });
   });
 
@@ -935,6 +1224,19 @@ export const sellStockItems = createServerFn({ method: "POST" })
               stockItemId: z.string().uuid(),
               selling_price: z.number().min(0).optional(),
               net_payment: z.number().min(0).optional(),
+              // Free extras handed over with THIS unit. They never change what
+              // the customer pays — they come off the sale's profit instead.
+              // Attached after the sale row exists, because an add-on cannot
+              // exist without one.
+              addons: z
+                .array(
+                  z.object({
+                    addonId: z.string().uuid(),
+                    qty: z.number().int().min(1).max(1000),
+                  }),
+                )
+                .max(20)
+                .optional(),
             }),
           )
           .min(1)
@@ -1007,6 +1309,7 @@ export const sellStockItems = createServerFn({ method: "POST" })
       });
       const salesRes = await context.supabase.from("sales").insert(saleRows).select();
       if (salesRes.error) throw salesRes.error;
+      const saleRowsBack = (salesRes.data ?? []) as SaleRow[];
 
       // decrement product stock by the number of units sold from each product —
       // distinct products are independent, so update them concurrently.
@@ -1019,7 +1322,15 @@ export const sellStockItems = createServerFn({ method: "POST" })
         [...soldPerProduct].map(([pid, n]) => applyStockDelta(context.supabase, pid, -n)),
       );
 
-      return { sold: ids.length, sales: salesRes.data ?? [] };
+      // Attach the free add-ons, now that the sales they hang off exist.
+      //
+      // Matched by stock_item_id rather than by array position: a stock unit is
+      // in this cart at most once (checked above), so it identifies its sale row
+      // exactly, and we never depend on the insert returning rows in the order
+      // they were sent.
+      const addonCost = await attachCartAddons(context.supabase, data.items, saleRowsBack);
+
+      return { sold: ids.length, sales: saleRowsBack, ...addonCost };
     } catch (err: any) {
       const hint = missingTableMessage(err, true);
       if (hint) throw new Error(hint);
@@ -1225,18 +1536,21 @@ export const listSalesPage = createServerFn({ method: "GET" })
     if (or) pq = pq.or(or);
     pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
 
+    // `id` is selected so the aggregate can subtract each sale's add-on cost —
+    // without it the KPI profit and the per-row profit would disagree.
     let aq = context.supabase
       .from("sales")
-      .select("selling_price, stock_item_id")
+      .select("id, selling_price, stock_item_id")
       .eq("org_id", context.orgId);
     if (fromIso) aq = aq.gte("created_at", fromIso);
     if (or) aq = aq.or(or);
 
-    const [prodRes, costRes, pageRes, aggRes] = await Promise.all([
+    const [prodRes, costRes, pageRes, aggRes, addonBySale] = await Promise.all([
       context.supabase.from("products").select("id, name, sku"),
       context.supabase.from("stock_items").select("id, purchase_price").eq("org_id", context.orgId),
       pq,
       aq,
+      addonCostBySale(context.supabase, context.orgId),
     ]);
 
     if (prodRes.error) throw new Error(prodRes.error.message);
@@ -1258,13 +1572,15 @@ export const listSalesPage = createServerFn({ method: "GET" })
       pageRows = (pageRes.data ?? []) as SaleSel[];
       total = pageRes.count ?? 0;
 
-      // revenue + profit across the whole filtered set
+      // revenue + profit across the whole filtered set. Revenue is untouched by
+      // add-ons — they are given away free — but profit is net of them.
       if (aggRes.error) throw aggRes.error;
       for (const s of aggRes.data ?? []) {
         const selling = Number(s.selling_price) || 0;
         const cost = s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
+        const addon = addonBySale.get(s.id)?.cost ?? 0;
         revenue += selling;
-        profit += selling - cost;
+        profit += selling - cost - addon;
       }
     } catch (err: any) {
       const hint = missingTableMessage(err, true);
@@ -1281,6 +1597,8 @@ export const listSalesPage = createServerFn({ method: "GET" })
       const live = s.product_id ? prodById.get(s.product_id) : undefined;
       const selling = Number(s.selling_price) || 0;
       const cost = hideCost ? 0 : s.stock_item_id ? (costById.get(s.stock_item_id) ?? 0) : 0;
+      const addon = addonBySale.get(s.id);
+      const addonCost = hideCost ? 0 : (addon?.cost ?? 0);
       return {
         id: s.id,
         kind: "sale",
@@ -1291,8 +1609,12 @@ export const listSalesPage = createServerFn({ method: "GET" })
         reference: s.stock_item_id ?? "—",
         amount: selling,
         cost,
-        profit: hideCost ? 0 : selling - cost,
+        profit: hideCost ? 0 : selling - cost - addonCost,
         sold: true,
+        addon_cost: addonCost,
+        // The unit count is not a cost, so an employee may see it — it tells
+        // them what was handed over without revealing what it was worth.
+        addon_units: addon?.units ?? 0,
       };
     });
 
@@ -1328,6 +1650,10 @@ export interface SaleDetail {
   stock_item_id: string | null;
   manufacture_id: string | null;
   cost: number;
+  /** What the free add-ons on this sale cost the org. Already subtracted from
+   *  `profit`; carried separately so the drawer can show the deduction. */
+  addon_cost: number;
+  addon_units: number;
   profit: number;
 }
 
@@ -1353,9 +1679,9 @@ export const getSaleDetail = createServerFn({ method: "GET" })
       throw new Error(err?.message || String(err));
     }
 
-    // the live product and the sold stock unit are independent lookups — run
-    // them together rather than back to back.
-    const [prodRes, stockRes] = await Promise.all([
+    // the live product, the sold stock unit and this sale's add-on total are
+    // independent lookups — run them together rather than back to back.
+    const [prodRes, stockRes, addonRes] = await Promise.all([
       sale.product_id
         ? context.supabase
             .from("products")
@@ -1370,6 +1696,12 @@ export const getSaleDetail = createServerFn({ method: "GET" })
             .eq("id", sale.stock_item_id)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null } as const),
+      context.supabase
+        .from("sale_addon_totals")
+        .select("addon_cost, addon_units")
+        .eq("sale_id", data.id)
+        .eq("org_id", context.orgId)
+        .maybeSingle(),
     ]);
 
     // live product (fresher name/sku/image) preferred over the snapshot
@@ -1392,6 +1724,12 @@ export const getSaleDetail = createServerFn({ method: "GET" })
       manufacture_id = stockRes.data.manufacture_id ?? null;
     }
 
+    // What the giveaways on this sale cost. A missing view (migration not run
+    // yet) simply means no add-ons, which is the correct answer then.
+    const addonCost =
+      hideCost || addonRes.error ? 0 : Number((addonRes.data as any)?.addon_cost) || 0;
+    const addonUnits = addonRes.error ? 0 : Number((addonRes.data as any)?.addon_units) || 0;
+
     const selling = Number(sale.selling_price) || 0;
     return {
       id: sale.id,
@@ -1409,21 +1747,46 @@ export const getSaleDetail = createServerFn({ method: "GET" })
       stock_item_id: sale.stock_item_id,
       manufacture_id,
       cost,
-      profit: hideCost ? 0 : selling - cost,
+      addon_cost: addonCost,
+      addon_units: addonUnits,
+      profit: hideCost ? 0 : selling - cost - addonCost,
     };
   });
 
-// One page of purchase rows (newest first) for the Purchases ledger, plus spend +
-// in-stock totals across the whole filtered set. Sourced from stock_items, scoped
-// by org_id; live product name/sku preferred over the snapshot. Admin-only: this
-// is purchase cost, and it backs the admin Purchases page.
+/**
+ * One page of purchase rows (newest first) for the Purchases ledger, plus spend
+ * and in-stock totals across the whole filtered set. Admin-only: this is
+ * purchase cost, and cost is what makes margin derivable.
+ *
+ * Two streams feed it, and they are shaped differently on purpose:
+ *
+ *   machinery — one row per UNIT, from stock_items. Each unit has a serial
+ *               (its manufacture id) and its own purchase price.
+ *   add-on    — one row per BATCH, from addon_stock_batches. Add-ons are bulk
+ *               consumables with no serial, so a lot of 50 blades is one row
+ *               with a batch code, not fifty.
+ *
+ * They are merged, sorted and paged HERE rather than in Postgres, because a
+ * single SQL window across two tables with different shapes would need a UNION
+ * whose columns lie about one side or the other. The handler was already
+ * reading the whole filtered set for its aggregates, so this does not change
+ * the amount of data it touches — only which columns come back.
+ */
 export const listPurchasesPage = createServerFn({ method: "GET" })
   .middleware([requireOrgAdmin])
-  .inputValidator((d: unknown) => z.object(pageInput).parse(d))
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        ...pageInput,
+        stream: z.enum(["all", "machinery", "addon"]).optional().default("all"),
+      })
+      .parse(d),
+  )
   .handler(async ({ context, data }): Promise<PagedLedger> => {
-    const { page, pageSize, search, from } = data;
+    const { page, pageSize, search, from, stream } = data;
 
     const or = ilikeOrFilter(["product_name", "product_sku", "manufacture_id"], search);
+    const addonOr = ilikeOrFilter(["addon_name", "addon_code", "batch_code"], search);
     const fromIso = from > 0 ? new Date(from).toISOString() : null;
     const offset = (page - 1) * pageSize;
 
@@ -1438,74 +1801,58 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
       created_at: string;
       order_id: string | null;
     };
+    type BatchSel = {
+      id: string;
+      addon_id: string | null;
+      addon_name: string | null;
+      addon_code: string | null;
+      batch_code: string;
+      quantity: number;
+      remaining: number;
+      unit_cost: number;
+      created_at: string;
+      order_id: string | null;
+    };
 
-    // products map, page rows, and the filtered-set aggregate are independent
-    let pq = context.supabase
+    let mq: any = context.supabase
       .from("stock_items")
       .select(
         "id, product_id, product_name, product_sku, manufacture_id, purchase_price, sold, created_at, order_id",
-        { count: "exact" },
       )
       .eq("org_id", context.orgId);
-    if (fromIso) pq = pq.gte("created_at", fromIso);
-    if (or) pq = pq.or(or);
-    pq = pq.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+    if (fromIso) mq = mq.gte("created_at", fromIso);
+    if (or) mq = mq.or(or);
+    mq = mq.order("created_at", { ascending: false });
 
-    let aq = context.supabase
-      .from("stock_items")
-      .select("purchase_price, sold")
+    let bq: any = context.supabase
+      .from("addon_stock_batches")
+      .select(
+        "id, addon_id, addon_name, addon_code, batch_code, quantity, remaining, unit_cost, created_at, order_id",
+      )
       .eq("org_id", context.orgId);
-    if (fromIso) aq = aq.gte("created_at", fromIso);
-    if (or) aq = aq.or(or);
+    if (fromIso) bq = bq.gte("created_at", fromIso);
+    if (addonOr) bq = bq.or(addonOr);
+    bq = bq.order("created_at", { ascending: false });
 
-    const [prodRes, pageRes, aggRes] = await Promise.all([
+    const [prodRes, stockRes, batchRes] = await Promise.all([
       context.supabase.from("products").select("id, name, sku"),
-      pq,
-      aq,
+      stream === "addon" ? Promise.resolve({ data: [], error: null } as const) : mq,
+      stream === "machinery" ? Promise.resolve({ data: [], error: null } as const) : bq,
     ]);
 
     if (prodRes.error) throw new Error(prodRes.error.message);
     const prodById = new Map<string, { name: string; sku: string }>();
     for (const p of prodRes.data ?? []) prodById.set(p.id, { name: p.name, sku: p.sku });
 
-    let pageRows: StockSel[] = [];
-    let total = 0;
-    let totalSpend = 0;
-    let stillInStock = 0;
-    try {
-      if (pageRes.error) throw pageRes.error;
-      pageRows = (pageRes.data ?? []) as StockSel[];
-      total = pageRes.count ?? 0;
-
-      // spend + in-stock count across the whole filtered set
-      if (aggRes.error) throw aggRes.error;
-      for (const r of aggRes.data ?? []) {
-        totalSpend += Number(r.purchase_price) || 0;
-        if (!r.sold) stillInStock += 1;
-      }
-    } catch (err: any) {
-      const hint = missingTableMessage(err, true);
-      if (hint) throw new Error(hint);
-      throw new Error(err?.message || String(err));
+    if (stockRes.error) {
+      const hint = missingTableMessage(stockRes.error, true);
+      throw new Error(hint ?? stockRes.error.message);
     }
+    // A deploy that has not run the add-on migration yet keeps a working
+    // Purchases page — it just has no add-on rows to show.
+    const batches: BatchSel[] = batchRes.error ? [] : ((batchRes.data ?? []) as BatchSel[]);
 
-    // Receipt photos hang off the order, not the unit. Only the orders on this
-    // page are looked up, so the extra round trip is bounded by pageSize.
-    const orderIds = [...new Set(pageRows.map((r) => r.order_id).filter(Boolean))] as string[];
-    const receiptByOrder = new Map<string, string | null>();
-    if (orderIds.length) {
-      const res = await context.supabase
-        .from("stock_orders")
-        .select("id, receipt_path")
-        .in("id", orderIds)
-        .eq("org_id", context.orgId);
-      // A missing stock_orders table only costs the receipt link, not the page.
-      if (!res.error) {
-        for (const o of res.data ?? []) receiptByOrder.set(o.id, o.receipt_path ?? null);
-      }
-    }
-
-    const rows: LedgerEntry[] = pageRows.map((it) => {
+    const machineryRows: LedgerEntry[] = ((stockRes.data ?? []) as StockSel[]).map((it) => {
       const live = it.product_id ? prodById.get(it.product_id) : undefined;
       return {
         id: it.id,
@@ -1520,9 +1867,78 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
         profit: 0,
         sold: Boolean(it.sold),
         order_id: it.order_id,
-        receipt_path: it.order_id ? (receiptByOrder.get(it.order_id) ?? null) : null,
+        stream: "machinery",
+        quantity: 1,
       };
     });
+
+    const addonRows: LedgerEntry[] = batches.map((b) => {
+      const qty = Number(b.quantity) || 0;
+      const unit = Number(b.unit_cost) || 0;
+      return {
+        id: b.id,
+        kind: "purchase",
+        date: b.created_at,
+        product_id: b.addon_id ?? "",
+        product_name: b.addon_name ?? "Deleted add-on",
+        sku: b.addon_code ?? "—",
+        reference: b.batch_code,
+        // The line total, not the per-unit price: a batch IS the line. The unit
+        // price is recoverable as amount / quantity, and the UI shows both.
+        amount: qty * unit,
+        cost: unit,
+        profit: 0,
+        // "Sold" for a batch means every unit in it has been given away.
+        sold: (Number(b.remaining) || 0) === 0,
+        order_id: b.order_id,
+        stream: "addon",
+        quantity: qty,
+      };
+    });
+
+    // Merge, newest first. Ties break on id so the order is stable across pages
+    // rather than shuffling two rows that share a timestamp.
+    const merged = [...machineryRows, ...addonRows].sort((a, b) => {
+      const d = new Date(b.date).getTime() - new Date(a.date).getTime();
+      return d !== 0 ? d : a.id.localeCompare(b.id);
+    });
+
+    const total = merged.length;
+    let totalSpend = 0;
+    let stillInStock = 0;
+    for (const r of merged) {
+      totalSpend += r.amount;
+      // Units still on the shelf: unsold machines, plus whatever is left of an
+      // add-on batch.
+      if (r.stream === "addon") {
+        const b = batches.find((x) => x.id === r.id);
+        stillInStock += Number(b?.remaining) || 0;
+      } else if (!r.sold) {
+        stillInStock += 1;
+      }
+    }
+
+    const rows = merged.slice(offset, offset + pageSize);
+
+    // Receipt photos hang off the order, not the unit — and one order can carry
+    // machines and add-ons under the same receipt. Only the orders on this page
+    // are looked up, so the extra round trip is bounded by pageSize.
+    const orderIds = [...new Set(rows.map((r) => r.order_id).filter(Boolean))] as string[];
+    if (orderIds.length) {
+      const res = await context.supabase
+        .from("stock_orders")
+        .select("id, receipt_path")
+        .in("id", orderIds)
+        .eq("org_id", context.orgId);
+      // A missing stock_orders table only costs the receipt link, not the page.
+      if (!res.error) {
+        const receiptByOrder = new Map<string, string | null>();
+        for (const o of res.data ?? []) receiptByOrder.set(o.id, o.receipt_path ?? null);
+        for (const r of rows) {
+          r.receipt_path = r.order_id ? (receiptByOrder.get(r.order_id) ?? null) : null;
+        }
+      }
+    }
 
     return {
       rows,

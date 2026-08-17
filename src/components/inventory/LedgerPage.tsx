@@ -12,7 +12,13 @@ import { relativeTime } from "@/lib/relative-time";
 import { SearchBox, Pagination } from "@/components/inventory/TableControls";
 
 const PAGE_SIZE = 10;
-const EMPTY_STATS: LedgerStats = { count: 0, revenue: 0, profit: 0, totalSpend: 0, stillInStock: 0 };
+const EMPTY_STATS: LedgerStats = {
+  count: 0,
+  revenue: 0,
+  profit: 0,
+  totalSpend: 0,
+  stillInStock: 0,
+};
 
 const fmt = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -33,12 +39,19 @@ export interface Kpi {
   tone?: "good" | "danger";
 }
 
+/** Purchases only: machinery and add-ons arrive on the same orders but are
+ *  different shapes of thing (one row per unit vs one row per batch), so the
+ *  page lets you look at either on its own. */
+export type LedgerStream = "all" | "machinery" | "addon";
+
 export interface LedgerConfig {
   title: string;
   subtitle: string;
   kind: "purchase" | "sale";
   empty: string;
   searchPlaceholder?: string;
+  /** Show the machinery/add-ons toggle and send `stream` to the server. */
+  streams?: boolean;
   kpis: Kpi[];
   columns: Column[];
   // optional detail drawer; when present, rows become clickable and open it
@@ -85,6 +98,7 @@ function periodStart(period: Period): number {
 
 export function LedgerPage({ config }: { config: LedgerConfig }) {
   const [period, setPeriod] = useState<Period>("month");
+  const [stream, setStream] = useState<LedgerStream>("all");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -107,13 +121,25 @@ export function LedgerPage({ config }: { config: LedgerConfig }) {
   // any filter change resets to the first page
   useEffect(() => {
     setPage(1);
-  }, [period, search]);
+  }, [period, search, stream]);
 
   const fetchPage = useServerFn(PAGE_FN[config.kind]);
   const from = periodStart(period);
   const { data, isFetching } = useQuery({
-    queryKey: [config.kind, "page", period, search, page],
-    queryFn: () => fetchPage({ data: { page, pageSize: PAGE_SIZE, search, from } }),
+    queryKey: [config.kind, "page", period, search, page, stream],
+    queryFn: () =>
+      fetchPage({
+        data: {
+          page,
+          pageSize: PAGE_SIZE,
+          search,
+          from,
+          // Only Purchases understands this. The sales validator is a plain
+          // z.object, which drops unknown keys, so sending it there is inert —
+          // but there is no reason to.
+          ...(config.streams ? { stream } : {}),
+        } as any,
+      }),
     refetchInterval: 15_000,
     refetchOnWindowFocus: true,
     placeholderData: keepPreviousData,
@@ -126,7 +152,7 @@ export function LedgerPage({ config }: { config: LedgerConfig }) {
   return (
     <>
       <PageHeader title={config.title} subtitle={config.subtitle}>
-        <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1">
+        <div className="-mx-1 flex flex-wrap items-center gap-2 overflow-x-auto px-1">
           {PERIODS.map((p) => (
             <button
               key={p.id}
@@ -140,6 +166,31 @@ export function LedgerPage({ config }: { config: LedgerConfig }) {
               {p.label}
             </button>
           ))}
+
+          {config.streams && (
+            <>
+              <span aria-hidden className="mx-1 h-4 w-px bg-hairline" />
+              {(
+                [
+                  { id: "all", label: "Everything" },
+                  { id: "machinery", label: "Machinery" },
+                  { id: "addon", label: "Add-ons" },
+                ] as { id: LedgerStream; label: string }[]
+              ).map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setStream(s.id)}
+                  className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                    stream === s.id
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-surface text-muted-foreground ring-1 ring-hairline hover:bg-secondary"
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </PageHeader>
 

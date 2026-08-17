@@ -7,6 +7,24 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 // the entry drawer. A stock unit sitting in ANY cart is "reserved": hidden from
 // other carts, subtracted from available stock, and returned the moment it leaves.
 
+/**
+ * A free extra going out with one unit.
+ *
+ * It attaches to the UNIT rather than to the cart, because `sales` holds one row
+ * per unit sold — so two saws in one cart can carry different add-ons. Nothing
+ * here affects `sellingPrice`: the customer pays the same either way, and
+ * `unitCost` is only carried so the drawer can show what the giveaway takes off
+ * the margin before you commit to it.
+ */
+export interface CartAddon {
+  addonId: string;
+  name: string;
+  code: string;
+  qty: number;
+  unitCost: number;
+  listValue: number;
+}
+
 export interface CartUnit {
   uid: string;
   productId: string;
@@ -15,6 +33,7 @@ export interface CartUnit {
   cost: number;
   sellingPrice: number;
   netPayment: number;
+  addons: CartAddon[];
 }
 
 export interface ProductSnapshot {
@@ -36,7 +55,10 @@ export interface EntryProduct {
   stock: number;
 }
 
-export type EntryLine = Pick<CartUnit, "stockItemId" | "manufactureId" | "cost" | "sellingPrice" | "netPayment">;
+export type EntryLine = Pick<
+  CartUnit,
+  "stockItemId" | "manufactureId" | "cost" | "sellingPrice" | "netPayment" | "addons"
+>;
 
 interface Cart {
   id: string;
@@ -72,6 +94,9 @@ interface CartContextValue {
   // reservation
   reservedQty: (productId: string) => number;
   reservedUnitIds: (productId: string, exceptCartId?: string | null) => Set<string>;
+  /** Add-on units promised by open carts, so two tills can't both promise the
+   *  last carry case. Mirrors reservedUnitIds for the machinery side. */
+  reservedAddonQty: (addonId: string, exceptCartId?: string | null) => number;
   // drawer state
   isOpen: boolean;
   setOpen: (v: boolean) => void;
@@ -117,8 +142,15 @@ function loadInitial(): Persisted {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     const p = JSON.parse(raw);
-    const carts: Cart[] = Array.isArray(p.carts) ? p.carts : [];
-    const activeCartId = carts.some((c) => c.id === p.activeCartId) ? p.activeCartId : carts[0]?.id ?? null;
+    // Carts persisted before add-ons existed have units with no `addons` key.
+    // Normalize on read so nothing downstream has to defend against it.
+    const carts: Cart[] = (Array.isArray(p.carts) ? p.carts : []).map((c: Cart) => ({
+      ...c,
+      units: (c.units ?? []).map((u) => ({ ...u, addons: u.addons ?? [] })),
+    }));
+    const activeCartId = carts.some((c) => c.id === p.activeCartId)
+      ? p.activeCartId
+      : (carts[0]?.id ?? null);
     return { carts, activeCartId };
   } catch {
     return fallback;
@@ -135,9 +167,19 @@ function applyProduct(
   const others = c.units.filter((u) => u.productId !== snapshot.productId);
   if (lines.length === 0) {
     const { [snapshot.productId]: _d, ...rest } = c.snapshots;
-    return { ...c, customerName: customer.name, customerContact: customer.contact, units: others, snapshots: rest };
+    return {
+      ...c,
+      customerName: customer.name,
+      customerContact: customer.contact,
+      units: others,
+      snapshots: rest,
+    };
   }
-  const mine: CartUnit[] = lines.map((l) => ({ uid: genId(), productId: snapshot.productId, ...l }));
+  const mine: CartUnit[] = lines.map((l) => ({
+    uid: genId(),
+    productId: snapshot.productId,
+    ...l,
+  }));
   return {
     ...c,
     customerName: customer.name,
@@ -172,7 +214,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setCarts((prev) => prev.map((c) => (c.id === active.id ? fn(c) : c)));
     };
 
-    const unitsFor = (productId: string) => (active ? active.units.filter((u) => u.productId === productId) : []);
+    const unitsFor = (productId: string) =>
+      active ? active.units.filter((u) => u.productId === productId) : [];
     const productIds = (active?.units ?? []).reduce<string[]>((acc, u) => {
       if (!acc.includes(u.productId)) acc.push(u.productId);
       return acc;
@@ -219,9 +262,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         const set = new Set<string>();
         for (const c of carts) {
           if (exceptCartId && c.id === exceptCartId) continue;
-          for (const u of c.units) if (u.productId === productId && u.stockItemId) set.add(u.stockItemId);
+          for (const u of c.units)
+            if (u.productId === productId && u.stockItemId) set.add(u.stockItemId);
         }
         return set;
+      },
+      reservedAddonQty: (addonId, exceptCartId) => {
+        let n = 0;
+        for (const c of carts) {
+          if (exceptCartId && c.id === exceptCartId) continue;
+          for (const u of c.units) {
+            for (const a of u.addons ?? []) if (a.addonId === addonId) n += a.qty;
+          }
+        }
+        return n;
       },
 
       isOpen,
@@ -280,7 +334,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           return next;
         }),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carts, activeCartId, isOpen, entryProduct, entryReturnToCart, entryMode]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

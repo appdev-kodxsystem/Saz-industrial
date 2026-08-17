@@ -4,7 +4,21 @@
 -- Consolidates every migration under supabase/migrations into one script that
 -- reproduces the database from scratch, with the security gaps closed.
 --
--- Idempotent: safe to re-run. It never drops a table and never deletes a row.
+-- Idempotent: safe to re-run, on an empty database or a partially-migrated one.
+-- It never drops a table and never deletes a row.
+--
+-- Every CREATE TABLE IF NOT EXISTS is followed by an ALTER TABLE ... ADD COLUMN
+-- IF NOT EXISTS block listing the same columns. This is not redundancy: the
+-- CREATE is skipped ENTIRELY when the table already exists, so without the ALTER
+-- a database carrying an older version of a table sails past the CREATE and then
+-- fails hundreds of lines later inside a function that selects a column it never
+-- gained. The ALTERs omit NOT NULL, because a column added to a table that
+-- already has rows cannot be NOT NULL without a default; fresh databases still
+-- get the stricter definition from the CREATE.
+--
+-- Run this file, NOT the individual files under supabase/migrations. Each
+-- migration assumes every earlier one has already been applied, so running a
+-- late one on its own fails on a missing dependency.
 --
 -- Security model
 --   * The tenant is the ORGANIZATION, not the user. Every data table is
@@ -72,12 +86,34 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Column reconciliation.
+--
+-- CREATE TABLE IF NOT EXISTS skips the WHOLE statement when the table already
+-- exists — it does not add columns the table is missing. A database carrying an
+-- older `profiles` therefore sails past the CREATE above and then fails several
+-- hundred lines later inside org_list_members with "column p.display_name does
+-- not exist". Every table in this file gets a block like this one so the script
+-- is idempotent in the way it claims to be: safe on an empty database, and
+-- safe on a partially-migrated one.
+--
+-- NOT NULL is deliberately omitted here even where the CREATE above has it: a
+-- column being added to a table that already has rows cannot be NOT NULL
+-- without a default, and refusing to widen an existing table would defeat the
+-- point. Fresh databases still get the stricter definition from the CREATE.
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS display_name TEXT,
+  ADD COLUMN IF NOT EXISTS avatar_url   TEXT,
+  ADD COLUMN IF NOT EXISTS company      TEXT,
+  ADD COLUMN IF NOT EXISTS email        TEXT,
+  ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMPTZ NOT NULL DEFAULT now();
+
 -- Supports email_exists() lookups, which compare on lower(email).
 CREATE INDEX IF NOT EXISTS profiles_email_lower_idx ON public.profiles (lower(email));
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.profiles FROM PUBLIC, anon;
+REVOKE ALL ON public.profiles FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.profiles TO authenticated;
 GRANT ALL ON public.profiles TO service_role;
 
@@ -122,6 +158,12 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.organizations
+  ADD COLUMN IF NOT EXISTS name       TEXT,
+  ADD COLUMN IF NOT EXISTS owner_id   UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 
 DROP TRIGGER IF EXISTS organizations_set_updated_at ON public.organizations;
@@ -150,6 +192,17 @@ CREATE TABLE IF NOT EXISTS public.organization_members (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.organization_members
+  ADD COLUMN IF NOT EXISTS org_id       UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id      UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS email        TEXT,
+  ADD COLUMN IF NOT EXISTS role         TEXT NOT NULL DEFAULT 'employee',
+  ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS password_set BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS invited_by   UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMPTZ NOT NULL DEFAULT now();
+
 CREATE UNIQUE INDEX IF NOT EXISTS organization_members_org_email_idx
   ON public.organization_members (org_id, lower(email));
 CREATE INDEX IF NOT EXISTS organization_members_email_lower_idx
@@ -167,8 +220,8 @@ CREATE TRIGGER organization_members_set_updated_at
 -- No UPDATE grant on organizations: renaming goes through org_rename(), because
 -- RLS has no column-level security and a blanket UPDATE would also have let an
 -- admin PATCH `owner_id` onto themselves and seize the org.
-REVOKE ALL ON public.organizations        FROM PUBLIC, anon;
-REVOKE ALL ON public.organization_members FROM PUBLIC, anon;
+REVOKE ALL ON public.organizations        FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.organization_members FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.organizations        TO authenticated;
 GRANT SELECT ON public.organization_members TO authenticated;
 GRANT ALL    ON public.organizations        TO service_role;
@@ -340,12 +393,28 @@ CREATE TABLE IF NOT EXISTS public.products (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.products
+  ADD COLUMN IF NOT EXISTS org_id         UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id        UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS name           TEXT,
+  ADD COLUMN IF NOT EXISTS sku            TEXT,
+  ADD COLUMN IF NOT EXISTS image_url      TEXT,
+  ADD COLUMN IF NOT EXISTS category       TEXT NOT NULL DEFAULT 'Uncategorized',
+  ADD COLUMN IF NOT EXISTS description    TEXT,
+  ADD COLUMN IF NOT EXISTS stock          INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS reorder_at     INTEGER NOT NULL DEFAULT 5,
+  ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS selling_price  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS pinned         BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at     TIMESTAMPTZ NOT NULL DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS products_org_id_idx     ON public.products(org_id);
 CREATE INDEX IF NOT EXISTS products_org_pinned_idx ON public.products(org_id, pinned DESC, updated_at DESC);
 
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.products FROM PUBLIC, anon;
+REVOKE ALL ON public.products FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.products TO authenticated;
 GRANT ALL ON public.products TO service_role;
 
@@ -409,6 +478,21 @@ CREATE TABLE IF NOT EXISTS public.stock_items (
   sold_at            TIMESTAMPTZ
 );
 
+-- order_id is added further down, with stock_orders — it cannot be referenced
+-- before that table exists.
+ALTER TABLE public.stock_items
+  ADD COLUMN IF NOT EXISTS product_id        UUID REFERENCES public.products(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS org_id            UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id           UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS product_name      TEXT,
+  ADD COLUMN IF NOT EXISTS product_sku       TEXT,
+  ADD COLUMN IF NOT EXISTS product_image_url TEXT,
+  ADD COLUMN IF NOT EXISTS manufacture_id    TEXT,
+  ADD COLUMN IF NOT EXISTS purchase_price    NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS sold              BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS sold_at           TIMESTAMPTZ;
+
 -- Partial index: "next available unit for this product", FIFO by created_at.
 CREATE INDEX IF NOT EXISTS idx_stock_items_product_created
   ON public.stock_items(product_id, created_at) WHERE sold = false;
@@ -417,7 +501,7 @@ CREATE INDEX IF NOT EXISTS stock_items_org_created_idx ON public.stock_items(org
 
 ALTER TABLE public.stock_items ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.stock_items FROM PUBLIC, anon;
+REVOKE ALL ON public.stock_items FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.stock_items TO authenticated;
 GRANT ALL ON public.stock_items TO service_role;
 
@@ -482,13 +566,31 @@ CREATE TABLE IF NOT EXISTS public.sales (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- pending_payment is a generated column, so it is derived on add rather than
+-- backfilled — an older `sales` gains a correct balance for every existing row.
+ALTER TABLE public.sales
+  ADD COLUMN IF NOT EXISTS product_id        UUID REFERENCES public.products(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_item_id     UUID REFERENCES public.stock_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS org_id            UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id           UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS product_name      TEXT,
+  ADD COLUMN IF NOT EXISTS product_sku       TEXT,
+  ADD COLUMN IF NOT EXISTS product_image_url TEXT,
+  ADD COLUMN IF NOT EXISTS selling_price     NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS net_payment       NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS pending_payment   NUMERIC GENERATED ALWAYS AS (selling_price - net_payment) STORED,
+  ADD COLUMN IF NOT EXISTS payment_status    TEXT NOT NULL DEFAULT 'completed',
+  ADD COLUMN IF NOT EXISTS customer_name     TEXT,
+  ADD COLUMN IF NOT EXISTS customer_contact  TEXT,
+  ADD COLUMN IF NOT EXISTS created_at        TIMESTAMPTZ NOT NULL DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS idx_sales_pending      ON public.sales(payment_status) WHERE payment_status = 'pending';
 CREATE INDEX IF NOT EXISTS sales_org_id_idx      ON public.sales(org_id);
 CREATE INDEX IF NOT EXISTS sales_org_created_idx ON public.sales(org_id, created_at DESC);
 
 ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.sales FROM PUBLIC, anon;
+REVOKE ALL ON public.sales FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.sales TO authenticated;
 GRANT ALL ON public.sales TO service_role;
 
@@ -946,11 +1048,606 @@ CREATE POLICY "Users can delete their own receipts"
 
 
 -- ---------------------------------------------------------------------------
--- 14. Default privileges for anything added later
+-- 14. Stock orders — one supplier run, many products, many units, one receipt
 -- ---------------------------------------------------------------------------
--- Supabase ships defaults that hand `anon` full DML on every new table in
--- public. Revoking them means the next table someone creates is closed until
--- its policies are written, rather than open until someone notices.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;
+-- Stock used to arrive one product at a time. This groups a whole purchase into
+-- a single order row so the receipt photo, the supplier and the total have
+-- somewhere to live, and every unit added in that run points back at it.
+--
+-- Non-destructive: stock_items.order_id is nullable, so every unit that predates
+-- ordering stays valid with a NULL order.
+CREATE TABLE IF NOT EXISTS public.stock_orders (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id       UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  -- audit stamp only; goes NULL if the admin who placed the order is removed.
+  user_id      UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  supplier     TEXT,
+  note         TEXT,
+  -- storage path inside the private `receipts` bucket, NOT a public URL. Read
+  -- back through a signed URL — see signStorageUrl in the client.
+  receipt_path TEXT,
+  total_cost   NUMERIC NOT NULL DEFAULT 0,
+  unit_count   INTEGER NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.stock_orders
+  ADD COLUMN IF NOT EXISTS org_id       UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id      UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS supplier     TEXT,
+  ADD COLUMN IF NOT EXISTS note         TEXT,
+  ADD COLUMN IF NOT EXISTS receipt_path TEXT,
+  ADD COLUMN IF NOT EXISTS total_cost   NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS unit_count   INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- ON DELETE SET NULL, not CASCADE: deleting an order must never delete the
+-- stock units it brought in — they are inventory, and may already be sold.
+ALTER TABLE public.stock_items
+  ADD COLUMN IF NOT EXISTS order_id UUID REFERENCES public.stock_orders(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS stock_items_order_idx ON public.stock_items(order_id);
+CREATE INDEX IF NOT EXISTS stock_orders_org_idx  ON public.stock_orders(org_id, created_at DESC);
+
+-- Manufacture ids are generated server-side per product, and the generator picks
+-- the next free number by reading the ids already on that product.
+CREATE INDEX IF NOT EXISTS stock_items_product_mfr_idx
+  ON public.stock_items(product_id, manufacture_id);
+
+-- Same split as stock_items: any member reads, only admins write.
+ALTER TABLE public.stock_orders ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Members can view org stock orders"  ON public.stock_orders;
+DROP POLICY IF EXISTS "Admins can insert org stock orders" ON public.stock_orders;
+DROP POLICY IF EXISTS "Admins can update org stock orders" ON public.stock_orders;
+DROP POLICY IF EXISTS "Admins can delete org stock orders" ON public.stock_orders;
+
+CREATE POLICY "Members can view org stock orders"
+  ON public.stock_orders FOR SELECT
+  TO authenticated USING (org_id = (select public.current_org_id()));
+
+CREATE POLICY "Admins can insert org stock orders"
+  ON public.stock_orders FOR INSERT
+  TO authenticated
+  WITH CHECK (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+CREATE POLICY "Admins can update org stock orders"
+  ON public.stock_orders FOR UPDATE
+  TO authenticated
+  USING      (org_id = (select public.current_org_id()) AND (select public.is_org_admin()))
+  WITH CHECK (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+CREATE POLICY "Admins can delete org stock orders"
+  ON public.stock_orders FOR DELETE
+  TO authenticated
+  USING (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+REVOKE ALL ON public.stock_orders FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.stock_orders TO authenticated;
+GRANT ALL ON public.stock_orders TO service_role;
+
+
+-- ---------------------------------------------------------------------------
+-- 15. Add-ons — free extras handed out with a sold unit, paid for out of margin
+-- ---------------------------------------------------------------------------
+-- An add-on is something the org gives away with a machine (a spare blade, a
+-- carry case, a warranty card). Three rules, all enforced here rather than in
+-- the UI:
+--   1. It never changes what the customer pays — nothing in `sales` moves.
+--   2. What it cost the org comes off the PROFIT of the sale it went out on.
+--   3. It cannot be sold on its own: sale_addons.sale_id is NOT NULL, and
+--      `authenticated` has no INSERT grant on that table, so the only way to
+--      consume add-on stock is addon_attach_to_sale(), which refuses to run
+--      unless the sale already exists in the caller's org.
+-- Every add-on concern is its own table — nothing is bolted onto products,
+-- stock_items or sales.
+--
+-- Stock is tracked as BATCHES, not one row per unit like stock_items: add-ons
+-- are bulk consumables with no serial number, and a batch still carries an exact
+-- per-unit cost. On-hand is derived from the batches (addon_stock_levels), so
+-- there is no counter to drift.
+
+CREATE TABLE IF NOT EXISTS public.addons (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id        UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  name          TEXT NOT NULL,
+  code          TEXT NOT NULL,
+  category      TEXT NOT NULL DEFAULT 'Uncategorized',
+  description   TEXT,
+  image_url     TEXT,
+  -- default cost, used to seed stock-in. What actually hits profit is the
+  -- unit_cost of the batch the unit came out of.
+  unit_cost     NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+  -- what it is worth to the customer, for the receipt line. Display only.
+  list_value    NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (list_value >= 0),
+  reorder_at    INTEGER NOT NULL DEFAULT 5 CHECK (reorder_at >= 0),
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.addons
+  ADD COLUMN IF NOT EXISTS org_id      UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id     UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS name        TEXT,
+  ADD COLUMN IF NOT EXISTS code        TEXT,
+  ADD COLUMN IF NOT EXISTS category    TEXT NOT NULL DEFAULT 'Uncategorized',
+  ADD COLUMN IF NOT EXISTS description TEXT,
+  ADD COLUMN IF NOT EXISTS image_url   TEXT,
+  ADD COLUMN IF NOT EXISTS unit_cost   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS list_value  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS reorder_at  INTEGER NOT NULL DEFAULT 5,
+  ADD COLUMN IF NOT EXISTS active      BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE UNIQUE INDEX IF NOT EXISTS addons_org_code_idx   ON public.addons (org_id, lower(code));
+CREATE INDEX        IF NOT EXISTS addons_org_active_idx ON public.addons (org_id, active, name);
+
+ALTER TABLE public.addons ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.addons FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.addons TO authenticated;
+GRANT ALL ON public.addons TO service_role;
+
+DROP POLICY IF EXISTS "Members can view org addons"  ON public.addons;
+DROP POLICY IF EXISTS "Admins can insert org addons" ON public.addons;
+DROP POLICY IF EXISTS "Admins can update org addons" ON public.addons;
+DROP POLICY IF EXISTS "Admins can delete org addons" ON public.addons;
+
+-- Same split as products: members read the catalogue, admins write it.
+CREATE POLICY "Members can view org addons"
+  ON public.addons FOR SELECT
+  TO authenticated USING (org_id = (select public.current_org_id()));
+
+CREATE POLICY "Admins can insert org addons"
+  ON public.addons FOR INSERT
+  TO authenticated
+  WITH CHECK (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+CREATE POLICY "Admins can update org addons"
+  ON public.addons FOR UPDATE
+  TO authenticated
+  USING      (org_id = (select public.current_org_id()) AND (select public.is_org_admin()))
+  WITH CHECK (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+CREATE POLICY "Admins can delete org addons"
+  ON public.addons FOR DELETE
+  TO authenticated
+  USING (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+DROP TRIGGER IF EXISTS addons_set_updated_at ON public.addons;
+CREATE TRIGGER addons_set_updated_at
+  BEFORE UPDATE ON public.addons
+  FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+
+
+-- One row per lot received, at one price. `quantity` never changes; `remaining`
+-- is what is still on the shelf. addon_id is SET NULL and name/code are
+-- snapshotted, so purchase history outlives the catalogue row.
+CREATE TABLE IF NOT EXISTS public.addon_stock_batches (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  addon_id      UUID REFERENCES public.addons(id) ON DELETE SET NULL,
+  org_id        UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  order_id      UUID REFERENCES public.stock_orders(id) ON DELETE SET NULL,
+  addon_name    TEXT,
+  addon_code    TEXT,
+  batch_code    TEXT NOT NULL,
+  quantity      INTEGER NOT NULL CHECK (quantity > 0 AND quantity <= 100000),
+  remaining     INTEGER NOT NULL CHECK (remaining >= 0),
+  unit_cost     NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT addon_batch_remaining_within_quantity CHECK (remaining <= quantity)
+);
+
+ALTER TABLE public.addon_stock_batches
+  ADD COLUMN IF NOT EXISTS addon_id   UUID REFERENCES public.addons(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS org_id     UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id    UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS order_id   UUID REFERENCES public.stock_orders(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS addon_name TEXT,
+  ADD COLUMN IF NOT EXISTS addon_code TEXT,
+  ADD COLUMN IF NOT EXISTS batch_code TEXT,
+  ADD COLUMN IF NOT EXISTS quantity   INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS remaining  INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS unit_cost  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS addon_batches_fifo_idx
+  ON public.addon_stock_batches (addon_id, created_at) WHERE remaining > 0;
+CREATE INDEX IF NOT EXISTS addon_batches_org_created_idx
+  ON public.addon_stock_batches (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS addon_batches_order_idx
+  ON public.addon_stock_batches (order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS addon_batches_code_idx
+  ON public.addon_stock_batches (addon_id, batch_code);
+
+ALTER TABLE public.addon_stock_batches ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.addon_stock_batches FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.addon_stock_batches TO authenticated;
+GRANT ALL ON public.addon_stock_batches TO service_role;
+
+DROP POLICY IF EXISTS "Members can view org addon batches"  ON public.addon_stock_batches;
+DROP POLICY IF EXISTS "Admins can insert org addon batches" ON public.addon_stock_batches;
+DROP POLICY IF EXISTS "Admins can update org addon batches" ON public.addon_stock_batches;
+DROP POLICY IF EXISTS "Admins can delete org addon batches" ON public.addon_stock_batches;
+
+-- Members read (they need to know how many are left). Only admins receive or
+-- correct stock. UPDATE stays admin-only, unlike stock_items: selling does not
+-- write this table directly, addon_attach_to_sale() does.
+CREATE POLICY "Members can view org addon batches"
+  ON public.addon_stock_batches FOR SELECT
+  TO authenticated USING (org_id = (select public.current_org_id()));
+
+CREATE POLICY "Admins can insert org addon batches"
+  ON public.addon_stock_batches FOR INSERT
+  TO authenticated
+  WITH CHECK (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+CREATE POLICY "Admins can update org addon batches"
+  ON public.addon_stock_batches FOR UPDATE
+  TO authenticated
+  USING      (org_id = (select public.current_org_id()) AND (select public.is_org_admin()))
+  WITH CHECK (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+CREATE POLICY "Admins can delete org addon batches"
+  ON public.addon_stock_batches FOR DELETE
+  TO authenticated
+  USING (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+-- Batch codes are issued per add-on (TK-01-B0001, -B0002, …). The addon row is
+-- locked first, so two admins stocking in at once queue instead of colliding.
+CREATE OR REPLACE FUNCTION public.addon_batch_defaults()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_name   TEXT;
+  v_code   TEXT;
+  v_prefix TEXT;
+  v_seq    INTEGER;
+BEGIN
+  IF NEW.remaining IS NULL THEN
+    NEW.remaining := NEW.quantity;
+  END IF;
+
+  SELECT name, code INTO v_name, v_code
+  FROM public.addons WHERE id = NEW.addon_id FOR UPDATE;
+
+  NEW.addon_name := COALESCE(NEW.addon_name, v_name);
+  NEW.addon_code := COALESCE(NEW.addon_code, v_code);
+
+  IF NEW.batch_code IS NULL OR NEW.batch_code = '' THEN
+    v_prefix := COALESCE(NULLIF(regexp_replace(upper(COALESCE(v_code, '')), '[^A-Z0-9]+', '-', 'g'), ''), 'ADDON');
+    -- Continue from the HIGHEST number already issued under this prefix, not
+    -- from a row count. Counting breaks the moment a batch is deleted: three
+    -- batches minus one gives a count of 2, the next insert claims -B0003, and
+    -- the unique index rejects it. Same rule the machinery side uses for
+    -- manufacture ids (nextManufactureIds in inventory.functions.ts).
+    SELECT COALESCE(MAX(substring(batch_code FROM '[0-9]+$')::INTEGER), 0) + 1
+      INTO v_seq
+    FROM public.addon_stock_batches
+    WHERE addon_id = NEW.addon_id
+      AND batch_code ~ ('^' || v_prefix || '-B[0-9]+$');
+    NEW.batch_code := v_prefix || '-B' || lpad(v_seq::TEXT, 4, '0');
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.addon_batch_defaults() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS addon_batches_defaults ON public.addon_stock_batches;
+CREATE TRIGGER addon_batches_defaults
+  BEFORE INSERT ON public.addon_stock_batches
+  FOR EACH ROW EXECUTE FUNCTION public.addon_batch_defaults();
+
+
+-- What actually went out of the door. sales holds one row per unit sold, so a
+-- sale_addons row reads as "this unit went out with N of these". sale_id NOT
+-- NULL is rule 3 expressed as a foreign key. Nothing here touches what the
+-- customer pays: total_cost is what the giveaway cost the organization.
+CREATE TABLE IF NOT EXISTS public.sale_addons (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sale_id         UUID NOT NULL REFERENCES public.sales(id) ON DELETE CASCADE,
+  addon_id        UUID REFERENCES public.addons(id) ON DELETE SET NULL,
+  batch_id        UUID REFERENCES public.addon_stock_batches(id) ON DELETE SET NULL,
+  org_id          UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  addon_name      TEXT,
+  addon_code      TEXT,
+  addon_image_url TEXT,
+  quantity        INTEGER NOT NULL CHECK (quantity > 0),
+  -- copied off the batch, so a later catalogue price change never rewrites the
+  -- profit of a sale that already happened.
+  unit_cost       NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+  total_cost      NUMERIC(12,2) GENERATED ALWAYS AS (unit_cost * quantity) STORED,
+  list_value      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- sale_id is intentionally absent: it is NOT NULL by design (rule 3 — an add-on
+-- cannot exist without the sale it went out on), and a NOT NULL column with no
+-- default cannot be bolted onto a table that already has rows. If sale_addons
+-- exists without it, that is a different table and the CREATE above is not what
+-- built it.
+ALTER TABLE public.sale_addons
+  ADD COLUMN IF NOT EXISTS addon_id        UUID REFERENCES public.addons(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS batch_id        UUID REFERENCES public.addon_stock_batches(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS org_id          UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS user_id         UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS addon_name      TEXT,
+  ADD COLUMN IF NOT EXISTS addon_code      TEXT,
+  ADD COLUMN IF NOT EXISTS addon_image_url TEXT,
+  ADD COLUMN IF NOT EXISTS quantity        INTEGER NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS unit_cost       NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_cost      NUMERIC(12,2) GENERATED ALWAYS AS (unit_cost * quantity) STORED,
+  ADD COLUMN IF NOT EXISTS list_value      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS created_at      TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS sale_addons_sale_idx  ON public.sale_addons (sale_id);
+CREATE INDEX IF NOT EXISTS sale_addons_org_idx   ON public.sale_addons (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS sale_addons_addon_idx ON public.sale_addons (addon_id);
+CREATE INDEX IF NOT EXISTS sale_addons_batch_idx ON public.sale_addons (batch_id);
+
+ALTER TABLE public.sale_addons ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.sale_addons FROM PUBLIC, anon, authenticated;
+-- Deliberately no INSERT/UPDATE grant: add-on stock is consumable only through
+-- addon_attach_to_sale(), which requires a sale.
+GRANT SELECT, DELETE ON public.sale_addons TO authenticated;
+GRANT ALL ON public.sale_addons TO service_role;
+
+DROP POLICY IF EXISTS "Members can view org sale addons"  ON public.sale_addons;
+DROP POLICY IF EXISTS "Admins can delete org sale addons" ON public.sale_addons;
+
+CREATE POLICY "Members can view org sale addons"
+  ON public.sale_addons FOR SELECT
+  TO authenticated USING (org_id = (select public.current_org_id()));
+
+CREATE POLICY "Admins can delete org sale addons"
+  ON public.sale_addons FOR DELETE
+  TO authenticated
+  USING (org_id = (select public.current_org_id()) AND (select public.is_org_admin()));
+
+-- Removing an add-on line puts the units back on the shelf — including when the
+-- whole sale is deleted and cascades here. Clamped at the batch's original
+-- quantity so a double restore cannot inflate stock.
+CREATE OR REPLACE FUNCTION public.addon_restore_batch()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF OLD.batch_id IS NOT NULL THEN
+    UPDATE public.addon_stock_batches
+       SET remaining = LEAST(quantity, remaining + OLD.quantity)
+     WHERE id = OLD.batch_id;
+  END IF;
+  RETURN OLD;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.addon_restore_batch() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS sale_addons_restore_batch ON public.sale_addons;
+CREATE TRIGGER sale_addons_restore_batch
+  AFTER DELETE ON public.sale_addons
+  FOR EACH ROW EXECUTE FUNCTION public.addon_restore_batch();
+
+
+-- One supplier run can carry machines and add-ons under one receipt. The two
+-- spends stay apart so "what did we spend on machinery" is still answerable.
+-- total_cost / unit_count keep their machinery-only meaning.
+ALTER TABLE public.stock_orders
+  ADD COLUMN IF NOT EXISTS addon_unit_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS addon_cost       NUMERIC NOT NULL DEFAULT 0;
+
+
+-- The only door into add-on stock. Consumes p_qty units oldest-batch-first,
+-- writes one sale_addons row per batch drawn from, and returns what the giveaway
+-- cost — the amount that comes off the sale's profit.
+--
+-- SECURITY DEFINER because it writes a table `authenticated` cannot insert into.
+-- Everything it trusts is re-derived from the JWT: the org from current_org_id(),
+-- and the sale must already exist in that org — which is what makes "an add-on
+-- cannot be sold without an item" true in the database. Any member may call it;
+-- giving an add-on away is part of ringing up a sale. If stock runs out mid-loop
+-- it raises, and the function body being atomic rolls the partial consumption
+-- back.
+CREATE OR REPLACE FUNCTION public.addon_attach_to_sale(
+  p_sale_id  UUID,
+  p_addon_id UUID,
+  p_qty      INTEGER
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_org   UUID;
+  v_name  TEXT;
+  v_code  TEXT;
+  v_img   TEXT;
+  v_value NUMERIC;
+  v_left  INTEGER := p_qty;
+  v_take  INTEGER;
+  v_cost  NUMERIC := 0;
+  b       RECORD;
+BEGIN
+  IF p_qty IS NULL OR p_qty < 1 OR p_qty > 1000 THEN
+    RAISE EXCEPTION 'Add-on quantity must be between 1 and 1000';
+  END IF;
+
+  v_org := public.current_org_id();
+  IF v_org IS NULL THEN
+    RAISE EXCEPTION 'Not a member of any organization';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.sales WHERE id = p_sale_id AND org_id = v_org
+  ) THEN
+    RAISE EXCEPTION 'An add-on can only go out with a sale in your organization';
+  END IF;
+
+  SELECT name, code, image_url, list_value
+    INTO v_name, v_code, v_img, v_value
+  FROM public.addons
+  WHERE id = p_addon_id AND org_id = v_org;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Add-on not found in your organization';
+  END IF;
+
+  -- FIFO. FOR UPDATE holds each batch for the rest of the transaction, so two
+  -- tills selling the last case cannot both take it.
+  FOR b IN
+    SELECT id, remaining, unit_cost
+    FROM public.addon_stock_batches
+    WHERE addon_id = p_addon_id AND org_id = v_org AND remaining > 0
+    ORDER BY created_at, id
+    FOR UPDATE
+  LOOP
+    EXIT WHEN v_left <= 0;
+    v_take := LEAST(v_left, b.remaining);
+
+    UPDATE public.addon_stock_batches
+       SET remaining = remaining - v_take
+     WHERE id = b.id;
+
+    INSERT INTO public.sale_addons (
+      sale_id, addon_id, batch_id, org_id, user_id,
+      addon_name, addon_code, addon_image_url,
+      quantity, unit_cost, list_value
+    ) VALUES (
+      p_sale_id, p_addon_id, b.id, v_org, (select auth.uid()),
+      v_name, v_code, v_img,
+      v_take, b.unit_cost, COALESCE(v_value, 0)
+    );
+
+    v_cost := v_cost + (v_take * b.unit_cost);
+    v_left := v_left - v_take;
+  END LOOP;
+
+  IF v_left > 0 THEN
+    RAISE EXCEPTION 'Only % unit(s) of "%" left in stock — % requested',
+      p_qty - v_left, v_name, p_qty;
+  END IF;
+
+  RETURN v_cost;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.addon_attach_to_sale(UUID, UUID, INTEGER) FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION public.addon_attach_to_sale(UUID, UUID, INTEGER) TO authenticated;
+
+-- Checkout attaches add-ons to many sale rows at once. One call, one
+-- transaction: every add-on on the cart lands, or none do.
+-- p_lines: [{"sale_id": "...", "addon_id": "...", "qty": 2}, …]
+CREATE OR REPLACE FUNCTION public.addon_attach_bulk(p_lines JSONB)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_line  JSONB;
+  v_total NUMERIC := 0;
+BEGIN
+  IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' THEN
+    RAISE EXCEPTION 'Expected an array of add-on lines';
+  END IF;
+  IF jsonb_array_length(p_lines) > 500 THEN
+    RAISE EXCEPTION 'Too many add-on lines in one call';
+  END IF;
+
+  FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines)
+  LOOP
+    v_total := v_total + public.addon_attach_to_sale(
+      (v_line->>'sale_id')::UUID,
+      (v_line->>'addon_id')::UUID,
+      (v_line->>'qty')::INTEGER
+    );
+  END LOOP;
+
+  RETURN v_total;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.addon_attach_bulk(JSONB) FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION public.addon_attach_bulk(JSONB) TO authenticated;
+
+-- security_invoker: these run with the CALLER's privileges, so the RLS on the
+-- tables underneath applies through them. Without it a view is a hole straight
+-- past the tenant boundary.
+CREATE OR REPLACE VIEW public.addon_stock_levels
+WITH (security_invoker = on) AS
+SELECT
+  a.id      AS addon_id,
+  a.org_id,
+  COALESCE(SUM(b.remaining), 0)::INTEGER              AS on_hand,
+  COALESCE(SUM(b.quantity), 0)::INTEGER               AS received,
+  COALESCE(SUM(b.quantity - b.remaining), 0)::INTEGER AS given_away,
+  COALESCE(SUM(b.remaining * b.unit_cost), 0)         AS on_hand_value,
+  COALESCE(SUM(b.quantity  * b.unit_cost), 0)         AS total_spend
+FROM public.addons a
+LEFT JOIN public.addon_stock_batches b ON b.addon_id = a.id
+GROUP BY a.id, a.org_id;
+
+-- Join into the ledger, the sale detail drawer and the profit series:
+-- profit = selling_price - unit cost - addon_cost.
+CREATE OR REPLACE VIEW public.sale_addon_totals
+WITH (security_invoker = on) AS
+SELECT
+  sa.sale_id,
+  sa.org_id,
+  SUM(sa.quantity)::INTEGER        AS addon_units,
+  SUM(sa.total_cost)               AS addon_cost,
+  SUM(sa.list_value * sa.quantity) AS addon_list_value
+FROM public.sale_addons sa
+GROUP BY sa.sale_id, sa.org_id;
+
+REVOKE ALL ON public.addon_stock_levels FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.sale_addon_totals  FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.addon_stock_levels TO authenticated;
+GRANT SELECT ON public.sale_addon_totals  TO authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- 15. Default privileges for anything added later
+-- ---------------------------------------------------------------------------
+-- Supabase ships defaults that hand BOTH `anon` and `authenticated` full DML on
+-- every new table in public. Revoking them means the next table someone creates
+-- is closed until its grants are written, rather than open until someone
+-- notices.
+--
+-- `authenticated` matters as much as `anon` here. Each table above does
+-- `REVOKE ALL ... FROM PUBLIC, anon, authenticated` and then grants back exactly
+-- what that table needs — which is the only reason a claim like "authenticated
+-- has no INSERT on sale_addons" is true. Without the revoke, the default grant
+-- survives and the GRANT line reads like a whitelist while actually being an
+-- addition to one. RLS still denied those writes (a table with RLS on and no
+-- policy for a command denies it), but that left one layer doing the work of
+-- two.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES    FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon;
+
+
+-- ---------------------------------------------------------------------------
+-- 16. Tell PostgREST about all of the above
+-- ---------------------------------------------------------------------------
+-- PostgREST answers from a cached copy of the schema. Until it reloads, a table
+-- that plainly exists in SQL still 404s through the API as
+-- "Could not find the table 'public.addons' in the schema cache" — which reads
+-- like the migration never ran. Supabase normally reloads on DDL, but the event
+-- can be missed on a large script like this one, so ask explicitly.
+NOTIFY pgrst, 'reload schema';

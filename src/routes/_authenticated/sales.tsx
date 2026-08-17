@@ -1,5 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LedgerPage, dateCell, productCell, money, type LedgerConfig } from "@/components/inventory/LedgerPage";
+import { Gift } from "lucide-react";
+import {
+  LedgerPage,
+  dateCell,
+  productCell,
+  money,
+  type LedgerConfig,
+} from "@/components/inventory/LedgerPage";
 import { SaleDetailDrawer } from "@/components/inventory/SaleDetailDrawer";
 import type { LedgerEntry, LedgerStats } from "@/lib/inventory.functions";
 import { useOrg } from "@/hooks/use-org";
@@ -43,13 +50,33 @@ function makeConfig(canSeeCost: boolean): LedgerConfig {
       { header: "Date", render: dateCell },
       { header: "Product", render: productCell },
       { header: "Sale Price", align: "right", render: (e: LedgerEntry) => money(e.amount) },
+      // Shown to everyone: what was handed over is not a cost, and an employee
+      // should be able to see it. The money it took off margin is admin-only.
+      {
+        header: "Add-ons",
+        align: "right" as const,
+        render: (e: LedgerEntry) =>
+          e.addon_units ? (
+            <span className="inline-flex items-center gap-1 text-muted-foreground">
+              <Gift className="size-3.5" />
+              {e.addon_units}
+            </span>
+          ) : (
+            <span className="text-muted-foreground/40">—</span>
+          ),
+      },
       ...(canSeeCost
         ? [
             {
               header: "Cost",
               align: "right" as const,
               render: (e: LedgerEntry) => (
-                <span className="text-muted-foreground">{money(e.cost)}</span>
+                <span className="text-muted-foreground">
+                  {money(e.cost)}
+                  {!!e.addon_cost && (
+                    <span className="ml-1 text-danger-foreground">+{money(e.addon_cost)}</span>
+                  )}
+                </span>
               ),
             },
             {
@@ -67,7 +94,12 @@ function makeConfig(canSeeCost: boolean): LedgerConfig {
         : []),
     ],
     renderDetail: ({ entry, open, onOpenChange }) => (
-      <SaleDetailDrawer entry={entry} open={open} onOpenChange={onOpenChange} canSeeCost={canSeeCost} />
+      <SaleDetailDrawer
+        entry={entry}
+        open={open}
+        onOpenChange={onOpenChange}
+        canSeeCost={canSeeCost}
+      />
     ),
   };
 }

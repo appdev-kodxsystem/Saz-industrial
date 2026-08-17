@@ -1,9 +1,12 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
+import { Gift, X } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { getSaleDetail, type LedgerEntry } from "@/lib/inventory.functions";
+import { getSaleAddons, removeSaleAddon } from "@/lib/addons.functions";
 import { money } from "@/components/inventory/LedgerPage";
 import { relativeTime } from "@/lib/relative-time";
 
@@ -23,11 +26,36 @@ export function SaleDetailDrawer({
    *  hides a section that would otherwise render as zeros for them. */
   canSeeCost?: boolean;
 }) {
+  const qc = useQueryClient();
   const fetchDetail = useServerFn(getSaleDetail);
+  const fetchAddons = useServerFn(getSaleAddons);
+  const dropAddon = useServerFn(removeSaleAddon);
+
   const { data, isFetching, isError } = useQuery({
     queryKey: ["sale", "detail", entry?.id],
     queryFn: () => fetchDetail({ data: { id: entry!.id } }),
     enabled: open && !!entry?.id,
+  });
+
+  // The add-on lines themselves, so the drawer can name what was handed over
+  // rather than only showing the total it took off margin.
+  const { data: addons = [] } = useQuery({
+    queryKey: ["sale", "addons", entry?.id],
+    queryFn: () => fetchAddons({ data: { saleId: entry!.id } }),
+    enabled: open && !!entry?.id,
+  });
+
+  // Taking an add-on back off a sale is a correction, so it is admin-only. The
+  // units go back on the shelf via the restore trigger on sale_addons.
+  const removeMut = useMutation({
+    mutationFn: (v: { id: string }) => dropAddon({ data: v }),
+    onSuccess: () => {
+      for (const key of [["sale"], ["addons"], ["ledger"], ["profit-series"]]) {
+        qc.invalidateQueries({ queryKey: key, refetchType: "active" });
+      }
+      toast.success("Add-on removed — the units are back in stock");
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to remove add-on"),
   });
 
   const dateLabel = (iso: string) =>
@@ -101,11 +129,63 @@ export function SaleDetailDrawer({
               />
             </Section>
 
+            {/* what went out free with this unit */}
+            {addons.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <Gift className="size-3.5" /> Add-ons given free
+                </span>
+                <div className="flex flex-col gap-2 rounded-2xl bg-surface-muted p-4">
+                  {addons.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm">
+                          {a.addon_name ?? "Deleted add-on"}
+                          <span className="ml-1.5 text-muted-foreground">×{a.quantity}</span>
+                        </div>
+                        <div className="truncate font-mono text-[11px] text-muted-foreground">
+                          {a.addon_code ?? "—"}
+                          {a.list_value > 0 && (
+                            <span className="ml-1.5 font-sans">
+                              worth {money(a.list_value * a.quantity)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {canSeeCost && (
+                          <span className="text-sm tabular-nums text-danger-foreground">
+                            −{money(a.total_cost)}
+                          </span>
+                        )}
+                        {canSeeCost && (
+                          <button
+                            onClick={() => removeMut.mutate({ id: a.id })}
+                            disabled={removeMut.isPending}
+                            aria-label={`Remove ${a.addon_name ?? "add-on"} from this sale`}
+                            className="grid size-7 place-items-center rounded-lg text-muted-foreground transition hover:bg-danger/10 hover:text-danger-foreground disabled:opacity-50"
+                          >
+                            <X className="size-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <p className="border-t border-hairline pt-2 text-[11px] text-muted-foreground">
+                    The customer paid nothing for these. Their cost comes out of this sale's profit.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* profit — admin-only */}
             {canSeeCost && (
               <Section title="Profit">
-                <Row label="Cost" value={money(data.cost)} muted />
                 <Row label="Selling price" value={money(data.selling_price)} muted />
+                <Row label="Unit cost" value={money(data.cost)} muted />
+                {data.addon_cost > 0 && (
+                  <Row label="Add-on cost" value={`−${money(data.addon_cost)}`} tone="danger" />
+                )}
                 <Row
                   label="Profit"
                   value={money(data.profit)}

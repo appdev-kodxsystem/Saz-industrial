@@ -6,6 +6,7 @@ import {
   BarChart3,
   Boxes,
   Building2,
+  Gift,
   Menu,
   PackagePlus,
   PanelLeftClose,
@@ -53,6 +54,10 @@ const GROUPS: NavGroup[] = [
     // Stock, which made that comparison a hunt.
     items: [
       { to: "/inventory", label: "Inventory", icon: Boxes },
+      // Add-ons sit next to Inventory because they are the other half of what
+      // goes out of the door — and employees need to see what they can promise
+      // at the counter, so this is not admin-only.
+      { to: "/addons", label: "Add-ons", icon: Gift, exact: true },
       { to: "/sales", label: "Sales", icon: ShoppingCart },
       { to: "/purchases", label: "Purchases", icon: Truck, adminOnly: true },
       { to: "/pending-payments", label: "Pending Payments", icon: Wallet },
@@ -63,6 +68,7 @@ const GROUPS: NavGroup[] = [
     adminOnly: true,
     items: [
       { to: "/products/new", label: "Add Product", icon: PlusCircle, adminOnly: true, exact: true },
+      { to: "/addons/new", label: "Add Add-on", icon: Gift, adminOnly: true, exact: true },
       { to: "/stock/new", label: "Add Stock", icon: PackagePlus, adminOnly: true, exact: true },
     ],
   },

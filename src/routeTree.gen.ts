@@ -21,9 +21,12 @@ import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedPendingPaymentsRouteImport } from './routes/_authenticated/pending-payments'
 import { Route as AuthenticatedOrganizationRouteImport } from './routes/_authenticated/organization'
 import { Route as AuthenticatedInventoryRouteImport } from './routes/_authenticated/inventory'
+import { Route as AuthenticatedAddonsIndexRouteImport } from './routes/_authenticated/addons.index'
 import { Route as AuthenticatedStockNewRouteImport } from './routes/_authenticated/stock.new'
 import { Route as AuthenticatedProductsNewRouteImport } from './routes/_authenticated/products.new'
+import { Route as AuthenticatedAddonsNewRouteImport } from './routes/_authenticated/addons.new'
 import { Route as AuthenticatedProductsProductIdEditRouteImport } from './routes/_authenticated/products.$productId.edit'
+import { Route as AuthenticatedAddonsAddonIdEditRouteImport } from './routes/_authenticated/addons.$addonId.edit'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
@@ -86,6 +89,12 @@ const AuthenticatedInventoryRoute = AuthenticatedInventoryRouteImport.update({
   path: '/inventory',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedAddonsIndexRoute =
+  AuthenticatedAddonsIndexRouteImport.update({
+    id: '/addons/',
+    path: '/addons/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedStockNewRoute = AuthenticatedStockNewRouteImport.update({
   id: '/stock/new',
   path: '/stock/new',
@@ -97,10 +106,21 @@ const AuthenticatedProductsNewRoute =
     path: '/products/new',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedAddonsNewRoute = AuthenticatedAddonsNewRouteImport.update({
+  id: '/addons/new',
+  path: '/addons/new',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedProductsProductIdEditRoute =
   AuthenticatedProductsProductIdEditRouteImport.update({
     id: '/products/$productId/edit',
     path: '/products/$productId/edit',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAddonsAddonIdEditRoute =
+  AuthenticatedAddonsAddonIdEditRouteImport.update({
+    id: '/addons/$addonId/edit',
+    path: '/addons/$addonId/edit',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 
@@ -116,8 +136,11 @@ export interface FileRoutesByFullPath {
   '/purchases': typeof AuthenticatedPurchasesRoute
   '/reports': typeof AuthenticatedReportsRoute
   '/sales': typeof AuthenticatedSalesRoute
+  '/addons/new': typeof AuthenticatedAddonsNewRoute
   '/products/new': typeof AuthenticatedProductsNewRoute
   '/stock/new': typeof AuthenticatedStockNewRoute
+  '/addons/': typeof AuthenticatedAddonsIndexRoute
+  '/addons/$addonId/edit': typeof AuthenticatedAddonsAddonIdEditRoute
   '/products/$productId/edit': typeof AuthenticatedProductsProductIdEditRoute
 }
 export interface FileRoutesByTo {
@@ -132,8 +155,11 @@ export interface FileRoutesByTo {
   '/purchases': typeof AuthenticatedPurchasesRoute
   '/reports': typeof AuthenticatedReportsRoute
   '/sales': typeof AuthenticatedSalesRoute
+  '/addons/new': typeof AuthenticatedAddonsNewRoute
   '/products/new': typeof AuthenticatedProductsNewRoute
   '/stock/new': typeof AuthenticatedStockNewRoute
+  '/addons': typeof AuthenticatedAddonsIndexRoute
+  '/addons/$addonId/edit': typeof AuthenticatedAddonsAddonIdEditRoute
   '/products/$productId/edit': typeof AuthenticatedProductsProductIdEditRoute
 }
 export interface FileRoutesById {
@@ -150,8 +176,11 @@ export interface FileRoutesById {
   '/_authenticated/purchases': typeof AuthenticatedPurchasesRoute
   '/_authenticated/reports': typeof AuthenticatedReportsRoute
   '/_authenticated/sales': typeof AuthenticatedSalesRoute
+  '/_authenticated/addons/new': typeof AuthenticatedAddonsNewRoute
   '/_authenticated/products/new': typeof AuthenticatedProductsNewRoute
   '/_authenticated/stock/new': typeof AuthenticatedStockNewRoute
+  '/_authenticated/addons/': typeof AuthenticatedAddonsIndexRoute
+  '/_authenticated/addons/$addonId/edit': typeof AuthenticatedAddonsAddonIdEditRoute
   '/_authenticated/products/$productId/edit': typeof AuthenticatedProductsProductIdEditRoute
 }
 export interface FileRouteTypes {
@@ -168,8 +197,11 @@ export interface FileRouteTypes {
     | '/purchases'
     | '/reports'
     | '/sales'
+    | '/addons/new'
     | '/products/new'
     | '/stock/new'
+    | '/addons/'
+    | '/addons/$addonId/edit'
     | '/products/$productId/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -184,8 +216,11 @@ export interface FileRouteTypes {
     | '/purchases'
     | '/reports'
     | '/sales'
+    | '/addons/new'
     | '/products/new'
     | '/stock/new'
+    | '/addons'
+    | '/addons/$addonId/edit'
     | '/products/$productId/edit'
   id:
     | '__root__'
@@ -201,8 +236,11 @@ export interface FileRouteTypes {
     | '/_authenticated/purchases'
     | '/_authenticated/reports'
     | '/_authenticated/sales'
+    | '/_authenticated/addons/new'
     | '/_authenticated/products/new'
     | '/_authenticated/stock/new'
+    | '/_authenticated/addons/'
+    | '/_authenticated/addons/$addonId/edit'
     | '/_authenticated/products/$productId/edit'
   fileRoutesById: FileRoutesById
 }
@@ -300,6 +338,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedInventoryRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/addons/': {
+      id: '/_authenticated/addons/'
+      path: '/addons'
+      fullPath: '/addons/'
+      preLoaderRoute: typeof AuthenticatedAddonsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/stock/new': {
       id: '/_authenticated/stock/new'
       path: '/stock/new'
@@ -314,11 +359,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProductsNewRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/addons/new': {
+      id: '/_authenticated/addons/new'
+      path: '/addons/new'
+      fullPath: '/addons/new'
+      preLoaderRoute: typeof AuthenticatedAddonsNewRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/products/$productId/edit': {
       id: '/_authenticated/products/$productId/edit'
       path: '/products/$productId/edit'
       fullPath: '/products/$productId/edit'
       preLoaderRoute: typeof AuthenticatedProductsProductIdEditRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/addons/$addonId/edit': {
+      id: '/_authenticated/addons/$addonId/edit'
+      path: '/addons/$addonId/edit'
+      fullPath: '/addons/$addonId/edit'
+      preLoaderRoute: typeof AuthenticatedAddonsAddonIdEditRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
   }
@@ -332,8 +391,11 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedPurchasesRoute: typeof AuthenticatedPurchasesRoute
   AuthenticatedReportsRoute: typeof AuthenticatedReportsRoute
   AuthenticatedSalesRoute: typeof AuthenticatedSalesRoute
+  AuthenticatedAddonsNewRoute: typeof AuthenticatedAddonsNewRoute
   AuthenticatedProductsNewRoute: typeof AuthenticatedProductsNewRoute
   AuthenticatedStockNewRoute: typeof AuthenticatedStockNewRoute
+  AuthenticatedAddonsIndexRoute: typeof AuthenticatedAddonsIndexRoute
+  AuthenticatedAddonsAddonIdEditRoute: typeof AuthenticatedAddonsAddonIdEditRoute
   AuthenticatedProductsProductIdEditRoute: typeof AuthenticatedProductsProductIdEditRoute
 }
 
@@ -345,8 +407,11 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedPurchasesRoute: AuthenticatedPurchasesRoute,
   AuthenticatedReportsRoute: AuthenticatedReportsRoute,
   AuthenticatedSalesRoute: AuthenticatedSalesRoute,
+  AuthenticatedAddonsNewRoute: AuthenticatedAddonsNewRoute,
   AuthenticatedProductsNewRoute: AuthenticatedProductsNewRoute,
   AuthenticatedStockNewRoute: AuthenticatedStockNewRoute,
+  AuthenticatedAddonsIndexRoute: AuthenticatedAddonsIndexRoute,
+  AuthenticatedAddonsAddonIdEditRoute: AuthenticatedAddonsAddonIdEditRoute,
   AuthenticatedProductsProductIdEditRoute:
     AuthenticatedProductsProductIdEditRoute,
 }

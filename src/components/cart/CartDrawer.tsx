@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { Pencil, Trash2, ShoppingCart, Package, User } from "lucide-react";
+import { Gift, Pencil, Trash2, ShoppingCart, Package, User } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { sellStockItems } from "@/lib/inventory.functions";
 import { supabase } from "@/integrations/supabase/client";
@@ -12,7 +12,11 @@ import { supabaseThumb } from "@/lib/img";
 import { useCart, type ProductSnapshot } from "./cart-context";
 import FileDrop from "@/components/ui/file-drop";
 
-const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR", maximumFractionDigits: 0 });
+const fmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "PKR",
+  maximumFractionDigits: 0,
+});
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -40,14 +44,22 @@ export function CartDrawer() {
     (acc, u) => {
       acc.revenue += u.sellingPrice;
       acc.cost += u.cost;
+      // Free extras: they never move revenue, so they only show up in profit.
+      for (const a of u.addons ?? []) {
+        acc.addonCost += a.qty * a.unitCost;
+        acc.addonUnits += a.qty;
+      }
       return acc;
     },
-    { revenue: 0, cost: 0 },
+    { revenue: 0, cost: 0, addonCost: 0, addonUnits: 0 },
   );
-  const profit = totals.revenue - totals.cost;
+  const profit = totals.revenue - totals.cost - totals.addonCost;
 
   // empty input means "paid in full"; otherwise clamp to [0, revenue]
-  const net = received.trim() === "" ? totals.revenue : Math.min(Math.max(0, Number(received) || 0), totals.revenue);
+  const net =
+    received.trim() === ""
+      ? totals.revenue
+      : Math.min(Math.max(0, Number(received) || 0), totals.revenue);
   const pending = Math.max(0, totals.revenue - net);
   // typed more than the bill total — flagged, not silently rewritten
   const overpaid = received.trim() !== "" && Number(received) > totals.revenue;
@@ -78,7 +90,10 @@ export function CartDrawer() {
 
   async function checkout() {
     if (!canCheckout) {
-      if (overpaid) return toast.error(`Amount received can't be more than the sale price (${fmt.format(totals.revenue)})`);
+      if (overpaid)
+        return toast.error(
+          `Amount received can't be more than the sale price (${fmt.format(totals.revenue)})`,
+        );
       if (!hasCustomer) return toast.error("Customer name and contact are required");
       return;
     }
@@ -108,9 +123,16 @@ export function CartDrawer() {
       const items = cart.units.map((u) => {
         const pay = Math.min(remaining, u.sellingPrice);
         remaining -= pay;
-        return { stockItemId: u.stockItemId, selling_price: u.sellingPrice, net_payment: pay };
+        return {
+          stockItemId: u.stockItemId,
+          selling_price: u.sellingPrice,
+          net_payment: pay,
+          // Attached server-side once this unit's sale row exists — an add-on
+          // cannot be recorded without the sale it went out on.
+          addons: (u.addons ?? []).map((a) => ({ addonId: a.addonId, qty: a.qty })),
+        };
       });
-      const { sold } = await sellItems({
+      const { sold, addonWarning } = await sellItems({
         data: { items, customer_name: name, customer_contact: contact },
       });
 
@@ -118,10 +140,25 @@ export function CartDrawer() {
       onReceiptChange(null);
       cart.setOpen(false);
       // refetch only what a sale actually changes — not every query in the app
-      for (const key of [["products"], ["sale"], ["purchase"], ["ledger"], ["profit-series"], ["pending-payments"]]) {
+      for (const key of [
+        ["products"],
+        ["addons"],
+        ["sale"],
+        ["purchase"],
+        ["ledger"],
+        ["profit-series"],
+        ["pending-payments"],
+      ]) {
         qc.invalidateQueries({ queryKey: key, refetchType: "active" });
       }
-      toast.success(`Sale recorded for ${name} — ${sold} unit(s), total ${fmt.format(totals.revenue)}`);
+      toast.success(
+        `Sale recorded for ${name} — ${sold} unit(s), total ${fmt.format(totals.revenue)}`,
+      );
+      // The sale itself succeeded; only the giveaway didn't land. Say so
+      // plainly rather than letting the add-ons quietly go missing.
+      if (addonWarning) {
+        toast.error(`Sale saved, but the add-ons weren't attached: ${addonWarning}`);
+      }
     } catch (err: any) {
       toast.error(err?.message || "Checkout failed");
     } finally {
@@ -131,7 +168,10 @@ export function CartDrawer() {
 
   return (
     <Sheet open={cart.isOpen} onOpenChange={cart.setOpen}>
-      <SheetContent side="right" className="flex max-h-dvh w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-md">
+      <SheetContent
+        side="right"
+        className="flex max-h-dvh w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-md"
+      >
         <SheetHeader className="shrink-0 space-y-0 border-b border-hairline bg-gradient-to-br from-primary/10 via-surface to-background px-5 py-5 text-left">
           <SheetTitle className="flex items-center gap-2.5 text-base font-semibold">
             <span className="grid size-8 place-items-center rounded-xl bg-primary/15 text-primary">
@@ -153,7 +193,9 @@ export function CartDrawer() {
             </div>
             <div>
               <p className="text-sm font-medium">Your cart is empty</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">Add products from Inventory to build a sale.</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Add products from Inventory to build a sale.
+              </p>
             </div>
           </div>
         ) : (
@@ -189,6 +231,18 @@ export function CartDrawer() {
                   if (!snap) return null;
                   const rows = cart.unitsFor(pid);
                   const selling = rows.reduce((s, u) => s + u.sellingPrice, 0);
+                  // Roll this product's add-ons up across its units, so two saws
+                  // each carrying a blade read as "Spare Blade ×2".
+                  const addonTally = new Map<string, { name: string; qty: number }>();
+                  for (const u of rows) {
+                    for (const a of u.addons ?? []) {
+                      const cur = addonTally.get(a.addonId);
+                      addonTally.set(a.addonId, {
+                        name: a.name,
+                        qty: (cur?.qty ?? 0) + a.qty,
+                      });
+                    }
+                  }
                   return (
                     <div
                       key={pid}
@@ -201,7 +255,11 @@ export function CartDrawer() {
                       <div className="flex items-start gap-3">
                         <div className="size-12 shrink-0 overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline">
                           {snap.imageUrl ? (
-                            <img src={supabaseThumb(snap.imageUrl, 96)} alt={snap.name} className="h-full w-full object-cover" />
+                            <img
+                              src={supabaseThumb(snap.imageUrl, 96)}
+                              alt={snap.name}
+                              className="h-full w-full object-cover"
+                            />
                           ) : (
                             <div className="grid h-full w-full place-items-center text-muted-foreground/40">
                               <Package className="size-5" />
@@ -215,13 +273,35 @@ export function CartDrawer() {
                               ×{rows.length}
                             </span>
                           </div>
-                          <div className="truncate text-xs text-muted-foreground">SKU {snap.sku}</div>
+                          <div className="truncate text-xs text-muted-foreground">
+                            SKU {snap.sku}
+                          </div>
                           <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                            {rows.map((u) => u.manufactureId).filter(Boolean).join(", ") || "—"}
+                            {rows
+                              .map((u) => u.manufactureId)
+                              .filter(Boolean)
+                              .join(", ") || "—"}
                           </div>
                         </div>
-                        <div className="shrink-0 text-right text-base font-bold tabular-nums">{fmt.format(selling)}</div>
+                        <div className="shrink-0 text-right text-base font-bold tabular-nums">
+                          {fmt.format(selling)}
+                        </div>
                       </div>
+
+                      {addonTally.size > 0 && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-hairline pt-2.5">
+                          <Gift className="size-3 shrink-0 text-muted-foreground" />
+                          {[...addonTally.values()].map((a) => (
+                            <span
+                              key={a.name}
+                              className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                            >
+                              {a.name} ×{a.qty}
+                            </span>
+                          ))}
+                          <span className="text-[10px] text-muted-foreground/70">free</span>
+                        </div>
+                      )}
 
                       <div className="mt-3 flex items-center justify-between border-t border-hairline pt-2.5">
                         <span className="text-[11px] font-medium text-muted-foreground">
@@ -250,8 +330,15 @@ export function CartDrawer() {
 
               {/* receipt */}
               <section className="space-y-2">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Receipt (optional)</h3>
-                <FileDrop file={receipt} previewUrl={receiptPreview} onChange={onReceiptChange} accept={"image/*,application/pdf"} />
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Receipt (optional)
+                </h3>
+                <FileDrop
+                  file={receipt}
+                  previewUrl={receiptPreview}
+                  onChange={onReceiptChange}
+                  accept={"image/*,application/pdf"}
+                />
               </section>
             </div>
 
@@ -259,11 +346,16 @@ export function CartDrawer() {
             <div className="shrink-0 border-t border-hairline bg-background/95 p-4 backdrop-blur">
               {/* amount received */}
               <div className="mb-3">
-                <label htmlFor="cart-received" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <label
+                  htmlFor="cart-received"
+                  className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+                >
                   Amount received
                 </label>
                 <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">Rs</span>
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                    Rs
+                  </span>
                   <input
                     id="cart-received"
                     type="number"
@@ -273,7 +365,9 @@ export function CartDrawer() {
                     onChange={(e) => setReceived(e.target.value)}
                     placeholder={`${totals.revenue} (paid in full)`}
                     className={`h-11 w-full rounded-xl bg-surface pl-9 pr-3 text-sm font-medium tabular-nums outline-none ring-1 transition focus:ring-2 ${
-                      overpaid ? "ring-danger/50 focus:ring-danger/50" : "ring-hairline focus:ring-primary/40"
+                      overpaid
+                        ? "ring-danger/50 focus:ring-danger/50"
+                        : "ring-hairline focus:ring-primary/40"
                     }`}
                   />
                 </div>
@@ -282,7 +376,9 @@ export function CartDrawer() {
                     type="button"
                     onClick={() => setReceived("")}
                     className={`rounded-full px-2.5 py-1 font-medium transition ${
-                      received.trim() === "" ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"
+                      received.trim() === ""
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-secondary text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     Paid in full
@@ -291,32 +387,57 @@ export function CartDrawer() {
                     type="button"
                     onClick={() => setReceived("0")}
                     className={`rounded-full px-2.5 py-1 font-medium transition ${
-                      received.trim() === "0" ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"
+                      received.trim() === "0"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-secondary text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     Unpaid
                   </button>
                   {overpaid && (
-                    <span className="ml-auto font-medium text-danger-foreground">Can't exceed {fmt.format(totals.revenue)}</span>
+                    <span className="ml-auto font-medium text-danger-foreground">
+                      Can't exceed {fmt.format(totals.revenue)}
+                    </span>
                   )}
                 </div>
               </div>
 
               <div className="mb-3 space-y-1.5 rounded-2xl bg-surface p-3 ring-1 ring-hairline">
-                <Row label={`Revenue · ${cart.count} unit${cart.count === 1 ? "" : "s"}`} value={fmt.format(totals.revenue)} strong />
-                <Row label="Pending" value={fmt.format(pending)} tone={pending > 0 ? "danger" : undefined} />
+                <Row
+                  label={`Revenue · ${cart.count} unit${cart.count === 1 ? "" : "s"}`}
+                  value={fmt.format(totals.revenue)}
+                  strong
+                />
+                <Row
+                  label="Pending"
+                  value={fmt.format(pending)}
+                  tone={pending > 0 ? "danger" : undefined}
+                />
+                {/* Sits above profit, not inside revenue: the customer is not
+                    billed for a giveaway, the margin absorbs it. */}
+                {totals.addonUnits > 0 && (
+                  <Row
+                    label={`Add-ons · ${totals.addonUnits} free`}
+                    value={`−${fmt.format(totals.addonCost)}`}
+                    tone="danger"
+                  />
+                )}
                 <div className="mt-1.5 flex items-center justify-between border-t border-hairline pt-2">
                   <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                     <User className="size-3.5" /> Est. profit
                   </span>
-                  <span className={`text-sm font-semibold tabular-nums ${profit >= 0 ? "text-success-foreground" : "text-danger-foreground"}`}>
+                  <span
+                    className={`text-sm font-semibold tabular-nums ${profit >= 0 ? "text-success-foreground" : "text-danger-foreground"}`}
+                  >
                     {fmt.format(profit)}
                   </span>
                 </div>
               </div>
 
               {!hasCustomer && (
-                <p className="mb-2 text-xs text-danger-foreground">Customer name and contact are required.</p>
+                <p className="mb-2 text-xs text-danger-foreground">
+                  Customer name and contact are required.
+                </p>
               )}
 
               <div className="flex gap-2">
@@ -331,7 +452,11 @@ export function CartDrawer() {
                   onClick={checkout}
                   disabled={!canCheckout || submitting}
                   className={`flex-1 rounded-xl bg-gradient-to-r from-primary to-primary/85 py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition active:scale-[0.99] ${
-                    submitting ? "cursor-wait opacity-80" : !canCheckout ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:shadow-primary/30"
+                    submitting
+                      ? "cursor-wait opacity-80"
+                      : !canCheckout
+                        ? "cursor-not-allowed opacity-50"
+                        : "cursor-pointer hover:shadow-primary/30"
                   }`}
                   aria-busy={submitting}
                 >
@@ -346,13 +471,27 @@ export function CartDrawer() {
   );
 }
 
-function Row({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: "good" | "danger" }) {
+function Row({
+  label,
+  value,
+  strong,
+  tone,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  tone?: "good" | "danger";
+}) {
   return (
     <div className="flex items-center justify-between gap-3 text-xs">
       <dt className="text-muted-foreground">{label}</dt>
       <dd
         className={`tabular-nums ${strong ? "text-sm font-semibold" : ""} ${
-          tone === "good" ? "font-medium text-success-foreground" : tone === "danger" ? "font-medium text-danger-foreground" : ""
+          tone === "good"
+            ? "font-medium text-success-foreground"
+            : tone === "danger"
+              ? "font-medium text-danger-foreground"
+              : ""
         }`}
       >
         {value}

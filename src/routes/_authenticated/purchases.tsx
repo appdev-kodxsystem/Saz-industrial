@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { LedgerPage, dateCell, productCell, money, type LedgerConfig } from "@/components/inventory/LedgerPage";
+import { Gift } from "lucide-react";
+import { LedgerPage, dateCell, money, type LedgerConfig } from "@/components/inventory/LedgerPage";
 import { ReceiptLink } from "@/components/inventory/ReceiptLink";
 
 export const Route = createFileRoute("/_authenticated/purchases")({
@@ -15,24 +16,55 @@ export const Route = createFileRoute("/_authenticated/purchases")({
 
 const config: LedgerConfig = {
   title: "Purchases",
-  subtitle: "Stock you bought in, with cost per unit",
+  subtitle: "Stock you bought in — machinery by the unit, add-ons by the batch",
   kind: "purchase",
   empty: "No purchases recorded yet.",
   searchPlaceholder: "Search by product, SKU, or batch…",
+  streams: true,
   kpis: [
     { label: "Purchases", value: (s) => String(s.count) },
     { label: "Total Spend", value: (s) => money(s.totalSpend) },
     {
-      label: "Avg Price",
+      label: "Avg Line",
       value: (s) => money(s.count ? s.totalSpend / s.count : 0),
     },
-    { label: "Still In Stock", value: (s) => String(s.stillInStock) },
+    { label: "Units In Stock", value: (s) => String(s.stillInStock) },
   ],
   columns: [
     { header: "Date", render: dateCell },
-    { header: "Product", render: productCell },
-    { header: "Batch / Mfr ID", render: (e) => <span className="text-muted-foreground">{e.reference}</span> },
-    { header: "Purchase Price", align: "right", render: (e) => money(e.amount) },
+    {
+      header: "Item",
+      render: (e) => (
+        <div className="flex flex-col">
+          <span className="flex items-center gap-1.5 font-medium">
+            {/* An add-on row is a batch, not a unit — mark it so the two
+                shapes on this page never get read as the same thing. */}
+            {e.stream === "addon" && <Gift className="size-3.5 shrink-0 text-muted-foreground" />}
+            {e.product_name}
+            {e.stream === "addon" && (e.quantity ?? 0) > 1 && (
+              <span className="text-xs font-normal text-muted-foreground">×{e.quantity}</span>
+            )}
+          </span>
+          <span className="text-xs text-muted-foreground">{e.sku}</span>
+        </div>
+      ),
+    },
+    {
+      header: "Batch / Mfr ID",
+      render: (e) => <span className="font-mono text-xs text-muted-foreground">{e.reference}</span>,
+    },
+    {
+      header: "Cost",
+      align: "right",
+      render: (e) => (
+        <div className="flex flex-col items-end">
+          <span>{money(e.amount)}</span>
+          {e.stream === "addon" && (e.quantity ?? 0) > 1 && (
+            <span className="text-xs text-muted-foreground">{money(e.cost)} / unit</span>
+          )}
+        </div>
+      ),
+    },
     { header: "Receipt", render: (e) => <ReceiptLink path={e.receipt_path} /> },
     {
       header: "Status",
@@ -43,7 +75,13 @@ const config: LedgerConfig = {
             e.sold ? "text-muted-foreground" : "text-success-foreground"
           }`}
         >
-          {e.sold ? "Sold" : "In stock"}
+          {e.stream === "addon"
+            ? e.sold
+              ? "All given"
+              : "In stock"
+            : e.sold
+              ? "Sold"
+              : "In stock"}
         </span>
       ),
     },
