@@ -274,13 +274,13 @@ function NewStockOrderPage() {
     { units: 0, cost: 0 },
   );
 
-  // A product can only appear once on an order — clicking it again just adds
-  // another unit, which is what the click almost always means anyway.
+  // A product can only appear once on an order — clicking it toggles selection,
+  // adding it if it's not on the order yet and removing it if it already is.
   function addProduct(p: ProductRow) {
     setLines((prev) => {
       const at = prev.findIndex((l) => l.productId === p.id);
       if (at === -1) return [...prev, blankLine(p)];
-      return prev.map((l, i) => (i === at ? { ...l, quantity: l.quantity + 1 } : l));
+      return prev.filter((l) => l.productId !== p.id);
     });
     setJustAdded(p.id);
     window.setTimeout(() => setJustAdded((cur) => (cur === p.id ? null : cur)), 900);
@@ -331,13 +331,13 @@ function NewStockOrderPage() {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
 
   // --- add-on lines -------------------------------------------------------
-  // An add-on can only appear once on an order; clicking it again adds a unit,
-  // which is what the click almost always means.
+  // An add-on can only appear once on an order; clicking it toggles selection,
+  // adding it if it's not on the order yet and removing it if it already is.
   function addAddon(a: AddonRow) {
     setAddonLines((prev) => {
       const at = prev.findIndex((l) => l.addonId === a.id);
       if (at === -1) return [...prev, blankAddonLine(a)];
-      return prev.map((l, i) => (i === at ? { ...l, quantity: l.quantity + 1 } : l));
+      return prev.filter((l) => l.addonId !== a.id);
     });
     setJustAdded(a.id);
     window.setTimeout(() => setJustAdded((cur) => (cur === a.id ? null : cur)), 900);
@@ -703,12 +703,23 @@ function NewStockOrderPage() {
                   </div>
                 ) : (
                   <>
-                    {lines.length > 0 && (
+                    {tab === "machinery" && lines.length === 0 && (
+                      <p className="py-6 text-center text-xs text-muted-foreground">
+                        No machinery on this order yet — pick some on the left.
+                      </p>
+                    )}
+                    {tab === "addons" && addonLines.length === 0 && (
+                      <p className="py-6 text-center text-xs text-muted-foreground">
+                        No add-ons on this order yet — pick some on the left.
+                      </p>
+                    )}
+                    {tab === "machinery" && lines.length > 0 && (
                       <SectionLabel icon={<Package className="size-3.5" />} label="Machinery">
                         {totals.units} unit{totals.units === 1 ? "" : "s"} ·{" "}
                         {fmt.format(totals.cost)}
                       </SectionLabel>
                     )}
+                    {tab === "machinery" && (
                     <div className="space-y-3">
                       {lines.map((line) => {
                         const p = byId.get(line.productId);
@@ -871,8 +882,9 @@ function NewStockOrderPage() {
                         );
                       })}
                     </div>
+                    )}
 
-                    {addonLines.length > 0 && (
+                    {tab === "addons" && addonLines.length > 0 && (
                       <>
                         <SectionLabel icon={<Gift className="size-3.5" />} label="Add-ons">
                           {addonTotals.units} unit{addonTotals.units === 1 ? "" : "s"} ·{" "}

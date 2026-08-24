@@ -213,6 +213,19 @@ function RootComponent() {
     };
   }, [router, queryClient]);
 
+  useEffect(() => {
+    const handleWheel = (e: Event) => {
+      const target = e.target as HTMLInputElement;
+      if (target?.tagName === "INPUT" && target?.type === "number") {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener("wheel", handleWheel, { passive: false } as EventListenerOptions);
+    return () =>
+      document.removeEventListener("wheel", handleWheel, { passive: false } as EventListenerOptions);
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
