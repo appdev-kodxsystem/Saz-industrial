@@ -1,9 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { ImageOff } from "lucide-react";
+import { Phone } from "lucide-react";
 import {
   listPendingPayments,
   settlePayment,
@@ -11,10 +11,14 @@ import {
 } from "@/lib/inventory.functions";
 import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { SearchBox, Pagination } from "@/components/inventory/TableControls";
-
-const PAGE_SIZE = 10;
-import { supabaseThumb } from "@/lib/img";
-import { relativeTime } from "@/lib/relative-time";
+import { DateFilter, useDateFilter } from "@/components/inventory/DateFilter";
+import {
+  DateCell,
+  Kpi,
+  TransactionTable,
+  money,
+  type TxColumn,
+} from "@/components/inventory/TransactionTable";
 import {
   Dialog,
   DialogContent,
@@ -28,43 +32,26 @@ export const Route = createFileRoute("/_authenticated/pending-payments")({
   component: PendingPaymentsPage,
 });
 
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 2,
-});
-const money = (n: number) => fmt.format(n || 0);
+const PAGE_SIZE = 10;
 
-function ProductThumb({ url, name }: { url: string | null; name: string }) {
-  if (!url) {
-    return (
-      <div className="grid size-12 shrink-0 place-items-center rounded-lg bg-surface-muted text-muted-foreground">
-        <ImageOff className="size-5" />
-      </div>
-    );
-  }
-  return (
-    <img
-      src={supabaseThumb(url, 96)}
-      alt={name}
-      width={48}
-      height={48}
-      className="size-12 shrink-0 rounded-lg object-cover ring-1 ring-hairline"
-      onError={(e) => {
-        const img = e.currentTarget;
-        if (img.src !== url) img.src = url;
-      }}
-    />
-  );
-}
-
+/**
+ * What customers still owe, one row per SALE.
+ *
+ * A balance belongs to the sale, not to each unit on it: someone who took three
+ * machines and paid half owes one amount, and used to appear here three times
+ * with a third of the balance each. Settling now credits the sale, and the
+ * server spreads it across the units underneath.
+ */
 function PendingPaymentsPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const list = useServerFn(listPendingPayments);
+  const { period, range, onChange } = useDateFilter("all");
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [active, setActive] = useState<PendingPaymentRow | null>(null);
 
   // debounce the search box so each keystroke doesn't hit the API
   useEffect(() => {
@@ -72,14 +59,14 @@ function PendingPaymentsPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  // search change resets to the first page
   useEffect(() => {
     setPage(1);
-  }, [search]);
+  }, [search, range.from, range.to]);
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["pending-payments", search, page],
-    queryFn: () => list({ data: { page, pageSize: PAGE_SIZE, search } }),
+    queryKey: ["pending-payments", search, page, range.from, range.to],
+    queryFn: () =>
+      list({ data: { page, pageSize: PAGE_SIZE, search, from: range.from, to: range.to } }),
     refetchInterval: 15_000,
     refetchOnWindowFocus: true,
     placeholderData: keepPreviousData,
@@ -87,162 +74,97 @@ function PendingPaymentsPage() {
 
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
-  const kpis = {
-    count: total,
-    outstanding: data?.outstanding ?? 0,
-    received: data?.received ?? 0,
-  };
 
-  const [active, setActive] = useState<PendingPaymentRow | null>(null);
+  const columns: TxColumn<PendingPaymentRow>[] = [
+    { header: "Date", render: (r) => <DateCell iso={r.created_at} /> },
+    {
+      header: "Customer / Items",
+      render: (r) => (
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate font-medium">{r.customer_name || "Walk-in"}</span>
+          <span className="truncate text-xs text-muted-foreground">{r.item_summary}</span>
+          {r.customer_contact && (
+            <span className="inline-flex items-center gap-1 truncate text-xs text-muted-foreground">
+              <Phone className="size-3" />
+              {r.customer_contact}
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      header: "Units",
+      align: "right",
+      render: (r) => <span className="text-muted-foreground">{r.unit_count}</span>,
+    },
+    { header: "Sale Total", align: "right", render: (r) => money(r.total_amount) },
+    {
+      header: "Received",
+      align: "right",
+      render: (r) => <span className="text-muted-foreground">{money(r.net_payment)}</span>,
+    },
+    {
+      header: "Pending",
+      align: "right",
+      render: (r) => (
+        <span className="font-medium text-danger-foreground">{money(r.pending_payment)}</span>
+      ),
+    },
+    {
+      header: "Action",
+      align: "right",
+      render: (r) => (
+        <button
+          onClick={(e) => {
+            // The row itself opens the sale; this button is the other action on
+            // it, so it must not also navigate.
+            e.stopPropagation();
+            setActive(r);
+          }}
+          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 active:scale-95"
+        >
+          Add Payment
+        </button>
+      ),
+    },
+  ];
 
   return (
     <>
-      <PageHeader
-        title="Pending Payments"
-        subtitle="Sold items with an outstanding balance"
-      />
+      <PageHeader title="Pending Payments" subtitle="Sales with an outstanding balance">
+        <DateFilter period={period} range={range} onChange={onChange} />
+      </PageHeader>
 
       <PageBody>
         <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
-          <Kpi label="Pending Records" value={String(kpis.count)} />
-          <Kpi label="Outstanding" value={money(kpis.outstanding)} tone="danger" />
-          <Kpi label="Received" value={money(kpis.received)} tone="good" />
+          <Kpi label="Pending Sales" value={String(total)} />
+          <Kpi label="Outstanding" value={money(data?.outstanding ?? 0)} tone="danger" />
+          <Kpi label="Received" value={money(data?.received ?? 0)} tone="good" />
         </section>
 
         <div className="mb-4 flex justify-end">
           <SearchBox
             value={searchInput}
             onChange={setSearchInput}
-            placeholder="Search by product, SKU, or customer…"
+            placeholder="Search customer or product…"
           />
         </div>
 
         {isLoading ? (
           <p className="mt-10 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : rows.length === 0 ? (
-          <p className="mt-10 text-center text-sm text-muted-foreground">
-            {search
-              ? "No results match your search."
-              : "No pending payments. All sales are fully settled."}
-          </p>
         ) : (
-          <>
-            {/* Table — md and up */}
-            <div className="hidden overflow-x-auto rounded-2xl bg-surface ring-1 ring-hairline md:block">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-hairline text-left text-xs text-muted-foreground">
-                    <th className="px-4 py-3 font-medium">Product</th>
-                    <th className="px-4 py-3 font-medium">Sale Date</th>
-                    <th className="px-4 py-3 font-medium">Customer</th>
-                    <th className="px-4 py-3 text-right font-medium">Selling Price</th>
-                    <th className="px-4 py-3 text-right font-medium">Net Received</th>
-                    <th className="px-4 py-3 text-right font-medium">Pending</th>
-                    <th className="px-4 py-3 text-right font-medium">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr
-                      key={r.id}
-                      className="border-b border-hairline last:border-0 hover:bg-surface-muted"
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <ProductThumb url={r.image_url} name={r.product_name} />
-                          <div className="flex min-w-0 flex-col">
-                            <span className="font-medium">{r.product_name}</span>
-                            <span className="text-xs text-muted-foreground">{r.sku}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col">
-                          <span>{new Date(r.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-                          <span className="text-xs text-muted-foreground">{relativeTime(r.created_at)}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {r.customer_name || r.customer_contact ? (
-                          <div className="flex flex-col">
-                            {r.customer_name && <span>{r.customer_name}</span>}
-                            {r.customer_contact && (
-                              <span className="text-xs text-muted-foreground">{r.customer_contact}</span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{money(r.selling_price)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{money(r.net_payment)}</td>
-                      <td className="px-4 py-3 text-right font-medium tabular-nums text-danger-foreground">
-                        {money(r.pending_payment)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => setActive(r)}
-                          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 active:scale-95"
-                        >
-                          Add Payment
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Cards — below md */}
-            <div className="flex flex-col gap-3 md:hidden">
-              {rows.map((r) => (
-                <div key={r.id} className="rounded-2xl bg-surface p-4 ring-1 ring-hairline">
-                  <div className="flex items-start gap-3 border-b border-hairline pb-3">
-                    <ProductThumb url={r.image_url} name={r.product_name} />
-                    <div className="flex min-w-0 flex-1 flex-col">
-                      <span className="font-medium">{r.product_name}</span>
-                      <span className="text-xs text-muted-foreground">{r.sku}</span>
-                    </div>
-                    <span className="shrink-0 text-right text-xs text-muted-foreground">
-                      {new Date(r.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                    </span>
-                  </div>
-                  <dl className="mt-3 flex flex-col gap-2">
-                    {(r.customer_name || r.customer_contact) && (
-                      <div className="flex items-center justify-between gap-3">
-                        <dt className="text-xs text-muted-foreground">Customer</dt>
-                        <dd className="text-sm">
-                          {r.customer_name}
-                          {r.customer_name && r.customer_contact ? " · " : ""}
-                          {r.customer_contact}
-                        </dd>
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-xs text-muted-foreground">Selling Price</dt>
-                      <dd className="text-sm tabular-nums">{money(r.selling_price)}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-xs text-muted-foreground">Net Received</dt>
-                      <dd className="text-sm tabular-nums">{money(r.net_payment)}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-xs text-muted-foreground">Pending</dt>
-                      <dd className="text-sm font-medium tabular-nums text-danger-foreground">
-                        {money(r.pending_payment)}
-                      </dd>
-                    </div>
-                  </dl>
-                  <button
-                    onClick={() => setActive(r)}
-                    className="mt-3 w-full rounded-lg bg-primary py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 active:scale-95"
-                  >
-                    Add Payment
-                  </button>
-                </div>
-              ))}
-            </div>
-          </>
+          <TransactionTable
+            rows={rows}
+            columns={columns}
+            onOpen={(r) => navigate({ to: "/sales/$saleId", params: { saleId: r.id } })}
+            empty={
+              <p className="mt-10 text-center text-sm text-muted-foreground">
+                {search
+                  ? "No results match your search."
+                  : "No pending payments. Every sale is settled."}
+              </p>
+            }
+          />
         )}
 
         {!isLoading && total > 0 && (
@@ -261,8 +183,9 @@ function PendingPaymentsPage() {
         onOpenChange={(v) => !v && setActive(null)}
         onSettled={() => {
           setActive(null);
-          qc.invalidateQueries({ queryKey: ["pending-payments"], refetchType: "active" });
-          qc.invalidateQueries({ queryKey: ["ledger"], refetchType: "active" });
+          for (const key of [["pending-payments"], ["sales"], ["sale"], ["profit-series"]]) {
+            qc.invalidateQueries({ queryKey: key, refetchType: "active" });
+          }
         }}
       />
     </>
@@ -289,7 +212,7 @@ function SettleDialog({
   const mut = useMutation({
     mutationFn: (v: { saleId: string; net_payment: number }) => settle({ data: v }),
     onSuccess: (_res, vars) => {
-      const fullyPaid = record ? vars.net_payment >= record.selling_price : false;
+      const fullyPaid = record ? vars.net_payment >= record.total_amount : false;
       toast.success(fullyPaid ? "Payment completed" : "Payment added");
       onSettled();
     },
@@ -299,10 +222,10 @@ function SettleDialog({
   if (!record) return null;
 
   const addNum = addPayment === "" ? 0 : Number(addPayment);
-  const maxAdd = Math.max(0, record.selling_price - record.net_payment);
+  const maxAdd = Math.max(0, record.total_amount - record.net_payment);
   const newNet = record.net_payment + addNum;
-  const pendingNum = Math.max(0, record.selling_price - newNet);
-  const exceeds = newNet > record.selling_price;
+  const pendingNum = Math.max(0, record.total_amount - newNet);
+  const exceeds = newNet > record.total_amount;
 
   return (
     <Dialog open={!!record} onOpenChange={onOpenChange}>
@@ -310,15 +233,15 @@ function SettleDialog({
         <DialogHeader>
           <DialogTitle>Add Payment</DialogTitle>
           <DialogDescription>
-            {record.product_name} · {record.sku}
+            {record.customer_name || "Walk-in"} · {record.item_summary}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 rounded-lg bg-surface-muted p-3 text-sm">
             <div>
-              <div className="text-xs text-muted-foreground">Selling Price</div>
-              <div className="font-medium tabular-nums">{money(record.selling_price)}</div>
+              <div className="text-xs text-muted-foreground">Sale Total</div>
+              <div className="font-medium tabular-nums">{money(record.total_amount)}</div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground">Currently Received</div>
@@ -336,8 +259,8 @@ function SettleDialog({
               onChange={(e) => {
                 const v = e.target.value;
                 if (v === "") return setAddPayment("");
-                const num = Number(v);
-                setAddPayment(String(Math.max(0, Number.isNaN(num) ? 0 : num)));
+                const n = Number(v);
+                setAddPayment(String(Math.max(0, Number.isNaN(n) ? 0 : n)));
               }}
               className="rounded-lg p-2 ring-1 ring-hairline"
             />
@@ -360,12 +283,12 @@ function SettleDialog({
               readOnly
               tabIndex={-1}
               aria-readonly="true"
-              className="rounded-lg bg-surface-muted p-2 ring-1 ring-hairline text-muted-foreground"
+              className="rounded-lg bg-surface-muted p-2 text-muted-foreground ring-1 ring-hairline"
             />
             <span className="text-xs text-muted-foreground">
               {pendingNum === 0
-                ? "This payment will be marked as completed."
-                : "Auto-calculated: selling price − total received."}
+                ? "This sale will be marked as completed."
+                : "Auto-calculated: sale total − total received."}
             </span>
           </label>
 
@@ -382,10 +305,10 @@ function SettleDialog({
               disabled={mut.isPending || exceeds || addNum <= 0}
               className={`flex-1 rounded-xl py-3 text-sm text-primary-foreground transition ${
                 mut.isPending
-                  ? "bg-primary/70 cursor-wait"
+                  ? "cursor-wait bg-primary/70"
                   : exceeds
-                    ? "bg-primary/70 cursor-not-allowed"
-                    : "bg-primary cursor-pointer hover:bg-primary/90"
+                    ? "cursor-not-allowed bg-primary/70"
+                    : "cursor-pointer bg-primary hover:bg-primary/90"
               }`}
             >
               {mut.isPending ? "Saving…" : pendingNum === 0 ? "Mark Completed" : "Add Payment"}
@@ -394,32 +317,5 @@ function SettleDialog({
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function Kpi({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "good" | "danger";
-}) {
-  const valueTone =
-    tone === "good"
-      ? "text-success-foreground"
-      : tone === "danger"
-        ? "text-danger-foreground"
-        : "text-foreground";
-  return (
-    <div className="flex flex-col gap-1 rounded-2xl bg-surface p-4 ring-1 ring-hairline sm:p-5">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <span className={`text-xl font-semibold tracking-tight sm:text-2xl tabular-nums ${valueTone}`}>
-        {value}
-      </span>
-    </div>
   );
 }

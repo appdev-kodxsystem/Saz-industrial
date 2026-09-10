@@ -13,15 +13,17 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthenticatedSalesRouteImport } from './routes/_authenticated/sales'
 import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
-import { Route as AuthenticatedPurchasesRouteImport } from './routes/_authenticated/purchases'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
 import { Route as AuthenticatedPendingPaymentsRouteImport } from './routes/_authenticated/pending-payments'
 import { Route as AuthenticatedOrganizationRouteImport } from './routes/_authenticated/organization'
 import { Route as AuthenticatedInventoryRouteImport } from './routes/_authenticated/inventory'
+import { Route as AuthenticatedSalesIndexRouteImport } from './routes/_authenticated/sales.index'
+import { Route as AuthenticatedPurchasesIndexRouteImport } from './routes/_authenticated/purchases.index'
 import { Route as AuthenticatedAddonsIndexRouteImport } from './routes/_authenticated/addons.index'
-import { Route as AuthenticatedStockNewRouteImport } from './routes/_authenticated/stock.new'
+import { Route as AuthenticatedSalesSaleIdRouteImport } from './routes/_authenticated/sales.$saleId'
+import { Route as AuthenticatedPurchasesNewRouteImport } from './routes/_authenticated/purchases.new'
+import { Route as AuthenticatedPurchasesPurchaseIdRouteImport } from './routes/_authenticated/purchases.$purchaseId'
 import { Route as AuthenticatedProductsNewRouteImport } from './routes/_authenticated/products.new'
 import { Route as AuthenticatedAddonsNewRouteImport } from './routes/_authenticated/addons.new'
 import { Route as AuthenticatedProductsProductIdEditRouteImport } from './routes/_authenticated/products.$productId.edit'
@@ -46,19 +48,9 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedSalesRoute = AuthenticatedSalesRouteImport.update({
-  id: '/sales',
-  path: '/sales',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
 const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedPurchasesRoute = AuthenticatedPurchasesRouteImport.update({
-  id: '/purchases',
-  path: '/purchases',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
@@ -83,17 +75,41 @@ const AuthenticatedInventoryRoute = AuthenticatedInventoryRouteImport.update({
   path: '/inventory',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedSalesIndexRoute = AuthenticatedSalesIndexRouteImport.update({
+  id: '/sales/',
+  path: '/sales/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedPurchasesIndexRoute =
+  AuthenticatedPurchasesIndexRouteImport.update({
+    id: '/purchases/',
+    path: '/purchases/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAddonsIndexRoute =
   AuthenticatedAddonsIndexRouteImport.update({
     id: '/addons/',
     path: '/addons/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedStockNewRoute = AuthenticatedStockNewRouteImport.update({
-  id: '/stock/new',
-  path: '/stock/new',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
+const AuthenticatedSalesSaleIdRoute =
+  AuthenticatedSalesSaleIdRouteImport.update({
+    id: '/sales/$saleId',
+    path: '/sales/$saleId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPurchasesNewRoute =
+  AuthenticatedPurchasesNewRouteImport.update({
+    id: '/purchases/new',
+    path: '/purchases/new',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPurchasesPurchaseIdRoute =
+  AuthenticatedPurchasesPurchaseIdRouteImport.update({
+    id: '/purchases/$purchaseId',
+    path: '/purchases/$purchaseId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedProductsNewRoute =
   AuthenticatedProductsNewRouteImport.update({
     id: '/products/new',
@@ -126,13 +142,15 @@ export interface FileRoutesByFullPath {
   '/organization': typeof AuthenticatedOrganizationRoute
   '/pending-payments': typeof AuthenticatedPendingPaymentsRoute
   '/profile': typeof AuthenticatedProfileRoute
-  '/purchases': typeof AuthenticatedPurchasesRoute
   '/reports': typeof AuthenticatedReportsRoute
-  '/sales': typeof AuthenticatedSalesRoute
   '/addons/new': typeof AuthenticatedAddonsNewRoute
   '/products/new': typeof AuthenticatedProductsNewRoute
-  '/stock/new': typeof AuthenticatedStockNewRoute
+  '/purchases/$purchaseId': typeof AuthenticatedPurchasesPurchaseIdRoute
+  '/purchases/new': typeof AuthenticatedPurchasesNewRoute
+  '/sales/$saleId': typeof AuthenticatedSalesSaleIdRoute
   '/addons/': typeof AuthenticatedAddonsIndexRoute
+  '/purchases/': typeof AuthenticatedPurchasesIndexRoute
+  '/sales/': typeof AuthenticatedSalesIndexRoute
   '/addons/$addonId/edit': typeof AuthenticatedAddonsAddonIdEditRoute
   '/products/$productId/edit': typeof AuthenticatedProductsProductIdEditRoute
 }
@@ -144,13 +162,15 @@ export interface FileRoutesByTo {
   '/organization': typeof AuthenticatedOrganizationRoute
   '/pending-payments': typeof AuthenticatedPendingPaymentsRoute
   '/profile': typeof AuthenticatedProfileRoute
-  '/purchases': typeof AuthenticatedPurchasesRoute
   '/reports': typeof AuthenticatedReportsRoute
-  '/sales': typeof AuthenticatedSalesRoute
   '/addons/new': typeof AuthenticatedAddonsNewRoute
   '/products/new': typeof AuthenticatedProductsNewRoute
-  '/stock/new': typeof AuthenticatedStockNewRoute
+  '/purchases/$purchaseId': typeof AuthenticatedPurchasesPurchaseIdRoute
+  '/purchases/new': typeof AuthenticatedPurchasesNewRoute
+  '/sales/$saleId': typeof AuthenticatedSalesSaleIdRoute
   '/addons': typeof AuthenticatedAddonsIndexRoute
+  '/purchases': typeof AuthenticatedPurchasesIndexRoute
+  '/sales': typeof AuthenticatedSalesIndexRoute
   '/addons/$addonId/edit': typeof AuthenticatedAddonsAddonIdEditRoute
   '/products/$productId/edit': typeof AuthenticatedProductsProductIdEditRoute
 }
@@ -164,13 +184,15 @@ export interface FileRoutesById {
   '/_authenticated/organization': typeof AuthenticatedOrganizationRoute
   '/_authenticated/pending-payments': typeof AuthenticatedPendingPaymentsRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
-  '/_authenticated/purchases': typeof AuthenticatedPurchasesRoute
   '/_authenticated/reports': typeof AuthenticatedReportsRoute
-  '/_authenticated/sales': typeof AuthenticatedSalesRoute
   '/_authenticated/addons/new': typeof AuthenticatedAddonsNewRoute
   '/_authenticated/products/new': typeof AuthenticatedProductsNewRoute
-  '/_authenticated/stock/new': typeof AuthenticatedStockNewRoute
+  '/_authenticated/purchases/$purchaseId': typeof AuthenticatedPurchasesPurchaseIdRoute
+  '/_authenticated/purchases/new': typeof AuthenticatedPurchasesNewRoute
+  '/_authenticated/sales/$saleId': typeof AuthenticatedSalesSaleIdRoute
   '/_authenticated/addons/': typeof AuthenticatedAddonsIndexRoute
+  '/_authenticated/purchases/': typeof AuthenticatedPurchasesIndexRoute
+  '/_authenticated/sales/': typeof AuthenticatedSalesIndexRoute
   '/_authenticated/addons/$addonId/edit': typeof AuthenticatedAddonsAddonIdEditRoute
   '/_authenticated/products/$productId/edit': typeof AuthenticatedProductsProductIdEditRoute
 }
@@ -184,13 +206,15 @@ export interface FileRouteTypes {
     | '/organization'
     | '/pending-payments'
     | '/profile'
-    | '/purchases'
     | '/reports'
-    | '/sales'
     | '/addons/new'
     | '/products/new'
-    | '/stock/new'
+    | '/purchases/$purchaseId'
+    | '/purchases/new'
+    | '/sales/$saleId'
     | '/addons/'
+    | '/purchases/'
+    | '/sales/'
     | '/addons/$addonId/edit'
     | '/products/$productId/edit'
   fileRoutesByTo: FileRoutesByTo
@@ -202,13 +226,15 @@ export interface FileRouteTypes {
     | '/organization'
     | '/pending-payments'
     | '/profile'
-    | '/purchases'
     | '/reports'
-    | '/sales'
     | '/addons/new'
     | '/products/new'
-    | '/stock/new'
+    | '/purchases/$purchaseId'
+    | '/purchases/new'
+    | '/sales/$saleId'
     | '/addons'
+    | '/purchases'
+    | '/sales'
     | '/addons/$addonId/edit'
     | '/products/$productId/edit'
   id:
@@ -221,13 +247,15 @@ export interface FileRouteTypes {
     | '/_authenticated/organization'
     | '/_authenticated/pending-payments'
     | '/_authenticated/profile'
-    | '/_authenticated/purchases'
     | '/_authenticated/reports'
-    | '/_authenticated/sales'
     | '/_authenticated/addons/new'
     | '/_authenticated/products/new'
-    | '/_authenticated/stock/new'
+    | '/_authenticated/purchases/$purchaseId'
+    | '/_authenticated/purchases/new'
+    | '/_authenticated/sales/$saleId'
     | '/_authenticated/addons/'
+    | '/_authenticated/purchases/'
+    | '/_authenticated/sales/'
     | '/_authenticated/addons/$addonId/edit'
     | '/_authenticated/products/$productId/edit'
   fileRoutesById: FileRoutesById
@@ -269,25 +297,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/sales': {
-      id: '/_authenticated/sales'
-      path: '/sales'
-      fullPath: '/sales'
-      preLoaderRoute: typeof AuthenticatedSalesRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
     '/_authenticated/reports': {
       id: '/_authenticated/reports'
       path: '/reports'
       fullPath: '/reports'
       preLoaderRoute: typeof AuthenticatedReportsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/purchases': {
-      id: '/_authenticated/purchases'
-      path: '/purchases'
-      fullPath: '/purchases'
-      preLoaderRoute: typeof AuthenticatedPurchasesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/profile': {
@@ -318,6 +332,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedInventoryRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/sales/': {
+      id: '/_authenticated/sales/'
+      path: '/sales'
+      fullPath: '/sales/'
+      preLoaderRoute: typeof AuthenticatedSalesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/purchases/': {
+      id: '/_authenticated/purchases/'
+      path: '/purchases'
+      fullPath: '/purchases/'
+      preLoaderRoute: typeof AuthenticatedPurchasesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/addons/': {
       id: '/_authenticated/addons/'
       path: '/addons'
@@ -325,11 +353,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAddonsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/stock/new': {
-      id: '/_authenticated/stock/new'
-      path: '/stock/new'
-      fullPath: '/stock/new'
-      preLoaderRoute: typeof AuthenticatedStockNewRouteImport
+    '/_authenticated/sales/$saleId': {
+      id: '/_authenticated/sales/$saleId'
+      path: '/sales/$saleId'
+      fullPath: '/sales/$saleId'
+      preLoaderRoute: typeof AuthenticatedSalesSaleIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/purchases/new': {
+      id: '/_authenticated/purchases/new'
+      path: '/purchases/new'
+      fullPath: '/purchases/new'
+      preLoaderRoute: typeof AuthenticatedPurchasesNewRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/purchases/$purchaseId': {
+      id: '/_authenticated/purchases/$purchaseId'
+      path: '/purchases/$purchaseId'
+      fullPath: '/purchases/$purchaseId'
+      preLoaderRoute: typeof AuthenticatedPurchasesPurchaseIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/products/new': {
@@ -368,13 +410,15 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedOrganizationRoute: typeof AuthenticatedOrganizationRoute
   AuthenticatedPendingPaymentsRoute: typeof AuthenticatedPendingPaymentsRoute
   AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
-  AuthenticatedPurchasesRoute: typeof AuthenticatedPurchasesRoute
   AuthenticatedReportsRoute: typeof AuthenticatedReportsRoute
-  AuthenticatedSalesRoute: typeof AuthenticatedSalesRoute
   AuthenticatedAddonsNewRoute: typeof AuthenticatedAddonsNewRoute
   AuthenticatedProductsNewRoute: typeof AuthenticatedProductsNewRoute
-  AuthenticatedStockNewRoute: typeof AuthenticatedStockNewRoute
+  AuthenticatedPurchasesPurchaseIdRoute: typeof AuthenticatedPurchasesPurchaseIdRoute
+  AuthenticatedPurchasesNewRoute: typeof AuthenticatedPurchasesNewRoute
+  AuthenticatedSalesSaleIdRoute: typeof AuthenticatedSalesSaleIdRoute
   AuthenticatedAddonsIndexRoute: typeof AuthenticatedAddonsIndexRoute
+  AuthenticatedPurchasesIndexRoute: typeof AuthenticatedPurchasesIndexRoute
+  AuthenticatedSalesIndexRoute: typeof AuthenticatedSalesIndexRoute
   AuthenticatedAddonsAddonIdEditRoute: typeof AuthenticatedAddonsAddonIdEditRoute
   AuthenticatedProductsProductIdEditRoute: typeof AuthenticatedProductsProductIdEditRoute
 }
@@ -384,13 +428,15 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedOrganizationRoute: AuthenticatedOrganizationRoute,
   AuthenticatedPendingPaymentsRoute: AuthenticatedPendingPaymentsRoute,
   AuthenticatedProfileRoute: AuthenticatedProfileRoute,
-  AuthenticatedPurchasesRoute: AuthenticatedPurchasesRoute,
   AuthenticatedReportsRoute: AuthenticatedReportsRoute,
-  AuthenticatedSalesRoute: AuthenticatedSalesRoute,
   AuthenticatedAddonsNewRoute: AuthenticatedAddonsNewRoute,
   AuthenticatedProductsNewRoute: AuthenticatedProductsNewRoute,
-  AuthenticatedStockNewRoute: AuthenticatedStockNewRoute,
+  AuthenticatedPurchasesPurchaseIdRoute: AuthenticatedPurchasesPurchaseIdRoute,
+  AuthenticatedPurchasesNewRoute: AuthenticatedPurchasesNewRoute,
+  AuthenticatedSalesSaleIdRoute: AuthenticatedSalesSaleIdRoute,
   AuthenticatedAddonsIndexRoute: AuthenticatedAddonsIndexRoute,
+  AuthenticatedPurchasesIndexRoute: AuthenticatedPurchasesIndexRoute,
+  AuthenticatedSalesIndexRoute: AuthenticatedSalesIndexRoute,
   AuthenticatedAddonsAddonIdEditRoute: AuthenticatedAddonsAddonIdEditRoute,
   AuthenticatedProductsProductIdEditRoute:
     AuthenticatedProductsProductIdEditRoute,

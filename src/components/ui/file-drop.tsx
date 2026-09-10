@@ -41,20 +41,22 @@ export default function FileDrop({
       />
 
       {!file ? (
-        <div className="flex flex-col items-center gap-3">
-          <div className="rounded-md bg-primary/5 p-4">
-            <UploadCloud className="size-8 text-primary-foreground" />
-          </div>
+        <div className="flex items-center justify-center gap-2.5 py-1">
+          <UploadCloud className="size-5 shrink-0 text-muted-foreground" />
           <div className="text-sm font-medium text-foreground">Browse files to upload</div>
         </div>
       ) : (
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             {previewUrl ? (
-              <img src={previewUrl} alt="preview" className="h-20 w-20 shrink-0 rounded-md object-cover" />
+              <img
+                src={previewUrl}
+                alt="preview"
+                className="size-14 shrink-0 rounded-md object-cover ring-1 ring-hairline"
+              />
             ) : (
-              <div className="h-20 w-20 shrink-0 rounded-md bg-surface-muted grid place-items-center">
-                <UploadCloud className="size-6 text-muted-foreground" />
+              <div className="grid size-14 shrink-0 place-items-center rounded-md bg-surface-muted">
+                <UploadCloud className="size-5 text-muted-foreground" />
               </div>
             )}
             <div className="min-w-0">

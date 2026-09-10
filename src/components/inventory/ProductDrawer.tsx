@@ -10,24 +10,22 @@ export function ProductDrawer({
   product,
   open,
   onOpenChange,
-  onAddToCart,
-  onAddStock,
+  onBuyMore,
 }: {
   product: ProductRow | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onAddToCart: (p: ProductRow) => void;
-  /** Omitted for employees: they cannot add stock, so the button is not
+  /** Omitted for employees: they cannot buy stock in, so the button is not
    *  rendered, and its absence also drives the cost/profit blocks below. */
-  onAddStock?: (p: ProductRow) => void;
+  onBuyMore?: (p: ProductRow) => void;
 }) {
   if (!product) return null;
   const sell = Number(product.selling_price);
   const buy = Number(product.purchase_price);
   const margin = sell > 0 ? ((sell - buy) / sell) * 100 : 0;
-  // Only an admin is handed onAddStock, so it doubles as the "is an admin" flag
+  // Only an admin is handed onBuyMore, so it doubles as the "is an admin" flag
   // for the cost and profit blocks.
-  const canSeeCost = Boolean(onAddStock);
+  const canSeeCost = Boolean(onBuyMore);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -42,7 +40,11 @@ export function ProductDrawer({
         <div className="flex flex-col gap-8 p-6">
           <div className="aspect-[4/3] w-full overflow-hidden rounded-2xl bg-surface-muted ring-1 ring-hairline">
             {product.image_url ? (
-              <img src={product.image_url} alt={product.name} className="h-full w-full object-cover" />
+              <img
+                src={product.image_url}
+                alt={product.name}
+                className="h-full w-full object-cover"
+              />
             ) : (
               <div className="grid h-full w-full place-items-center text-muted-foreground/40">
                 <Package className="size-16" strokeWidth={1.25} />
@@ -82,27 +84,20 @@ export function ProductDrawer({
           )}
         </div>
 
-        <div className="sticky bottom-0 border-t border-hairline bg-surface/95 p-4 backdrop-blur">
-          <div className="flex gap-2">
-            {onAddStock && (
-              <button
-                type="button"
-                onClick={() => onAddStock(product)}
-                className="flex-1 rounded-xl bg-secondary py-3 text-sm font-medium"
-              >
-                Add Stock
-              </button>
-            )}
+        {/* Selling is not an action on this page any more — it happens at the
+            till, on Sales, with the whole ticket in view. The only write left
+            here is buying more of it in. */}
+        {onBuyMore && (
+          <div className="sticky bottom-0 border-t border-hairline bg-surface/95 p-4 backdrop-blur">
             <button
               type="button"
-              disabled={product.stock <= 0}
-              onClick={() => onAddToCart(product)}
-              className="flex-1 rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
+              onClick={() => onBuyMore(product)}
+              className="w-full rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90"
             >
-              Add to Cart
+              Buy more of this
             </button>
           </div>
-        </div>
+        )}
       </SheetContent>
     </Sheet>
   );
@@ -111,7 +106,9 @@ export function ProductDrawer({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5 bg-surface p-4">
-      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
       <span className="text-sm font-semibold tabular-nums">{value}</span>
     </div>
   );
@@ -120,13 +117,23 @@ function Stat({ label, value }: { label: string; value: string }) {
 function MetricBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-surface-muted p-4">
-      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
       <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
 
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function Section({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <section className="flex flex-col gap-3">
       <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

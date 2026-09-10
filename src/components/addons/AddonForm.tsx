@@ -55,7 +55,6 @@ export function AddonForm({
   const [unitCost, setUnitCost] = useState(initial?.unit_cost ? String(initial.unit_cost) : "");
   const [listValue, setListValue] = useState(initial?.list_value ? String(initial.list_value) : "");
   const [reorderAt, setReorderAt] = useState(String(initial?.reorder_at ?? 5));
-  const [active, setActive] = useState(initial?.active ?? true);
   const [imageUrl, setImageUrl] = useState<string | null>(initial?.image_url ?? null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
@@ -100,7 +99,6 @@ export function AddonForm({
         unit_cost: Math.max(0, Number(unitCost) || 0),
         list_value: Math.max(0, Number(listValue) || 0),
         reorder_at: Math.max(0, Number(reorderAt) || 0),
-        active,
       };
       if (initial?.id) payload.id = initial.id;
 
@@ -291,23 +289,6 @@ export function AddonForm({
                   className={`${inputCls} tabular-nums`}
                 />
               </Field>
-
-              {/* Retiring keeps the add-on on every sale it already went out on
-                  — it only disappears from the sell-time picker. */}
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-surface-muted p-3 ring-1 ring-hairline">
-                <span className="flex flex-col">
-                  <span className="text-xs font-medium">Available to give away</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    Turn off to retire it without losing its history.
-                  </span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={active}
-                  onChange={(e) => setActive(e.target.checked)}
-                  className="size-4 shrink-0 accent-primary"
-                />
-              </label>
             </div>
           </section>
         </div>

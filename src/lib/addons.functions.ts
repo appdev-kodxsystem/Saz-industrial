@@ -37,7 +37,6 @@ export interface AddonRow {
   /** What it's worth to the customer, for the receipt line. Never charged. */
   list_value: number;
   reorder_at: number;
-  active: boolean;
   created_at: string;
   updated_at: string;
   // from addon_stock_levels — derived from the batches, so it cannot drift
@@ -105,7 +104,6 @@ const addonInput = z.object({
   unit_cost: z.number().min(0).max(1_000_000),
   list_value: z.number().min(0).max(1_000_000),
   reorder_at: z.number().int().min(0).max(1_000_000),
-  active: z.boolean(),
 });
 
 /**
@@ -126,7 +124,6 @@ export const listAddons = createServerFn({ method: "GET" })
         .from("addons")
         .select("*")
         .eq("org_id", context.orgId)
-        .order("active", { ascending: false })
         .order("name", { ascending: true }),
       context.supabase.from("addon_stock_levels").select("*").eq("org_id", context.orgId),
     ]);
@@ -190,9 +187,9 @@ export const upsertAddon = createServerFn({ method: "POST" })
   });
 
 /**
- * Retire or delete an add-on.
+ * Delete an add-on.
  *
- * Deleting is safe for history: addon_stock_batches.addon_id and
+ * Safe for history: addon_stock_batches.addon_id and
  * sale_addons.addon_id are both ON DELETE SET NULL and carry name/code
  * snapshots, so past purchases and past giveaways survive intact.
  */
@@ -203,22 +200,6 @@ export const deleteAddon = createServerFn({ method: "POST" })
     const { error } = await context.supabase
       .from("addons")
       .delete()
-      .eq("id", data.id)
-      .eq("org_id", context.orgId);
-    if (error) throw new Error(missingAddonTableMessage(error) ?? error.message);
-    return { ok: true };
-  });
-
-/** Flip `active`. A retired add-on stays on old sales but drops out of the
- *  sell-time picker — the usual way to take something out of circulation
- *  without erasing what it cost you. */
-export const setAddonActive = createServerFn({ method: "POST" })
-  .middleware([requireOrgAdmin])
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid(), active: z.boolean() }).parse(d))
-  .handler(async ({ context, data }) => {
-    const { error } = await context.supabase
-      .from("addons")
-      .update({ active: data.active })
       .eq("id", data.id)
       .eq("org_id", context.orgId);
     if (error) throw new Error(missingAddonTableMessage(error) ?? error.message);

@@ -301,7 +301,9 @@ function OrganizationPage() {
                         <DropdownMenuContent align="end" className="w-52">
                           {!m.password_set && (
                             <>
-                              <DropdownMenuItem onClick={() => resendMut.mutate({ memberId: m.id })}>
+                              <DropdownMenuItem
+                                onClick={() => resendMut.mutate({ memberId: m.id })}
+                              >
                                 <Send className="size-4" /> Resend invite
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
