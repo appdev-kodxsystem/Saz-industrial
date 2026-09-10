@@ -38,16 +38,6 @@ function pruneMembershipCache(now: number) {
 }
 
 /**
- * Drop a user's cached membership so the next request re-reads it.
- *
- * Call this from any handler that changes membership (role updates, removals,
- * invite claims) so the change is visible immediately instead of after the TTL.
- */
-export function invalidateMembership(userId: string) {
-  membershipCache.delete(userId);
-}
-
-/**
  * Drop every cached membership.
  *
  * Membership mutations identify people by membership-row id, not user id, so

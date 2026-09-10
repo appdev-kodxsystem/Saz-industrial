@@ -267,18 +267,12 @@ export function PrintReportDialog() {
     }).length;
   }, [entries, range]);
 
-  const [exporting, setExporting] = useState(false);
   const canExport = Boolean(range?.from && range?.to);
 
   async function handleExport() {
     if (!range?.from || !range?.to) return;
-    setExporting(true);
-    try {
-      await downloadPdf(entries, range.from, range.to);
-      setOpen(false);
-    } finally {
-      setExporting(false);
-    }
+    await downloadPdf(entries, range.from, range.to);
+    setOpen(false);
   }
 
   return (

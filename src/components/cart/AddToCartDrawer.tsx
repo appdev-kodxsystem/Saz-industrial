@@ -116,6 +116,16 @@ export function AddToCartDrawer() {
     [serverUnits, reservedKey],
   );
 
+  // `available` can hold every unsold unit of a product, and the lookups below
+  // run once per line on every render — a linear scan each time made this
+  // drawer quadratic in (lines x units). Unit ids are primary keys, so
+  // first-wins insertion returns exactly what .find() did.
+  const availableById = useMemo(() => {
+    const m = new Map<string, Unit>();
+    for (const u of available) if (!m.has(u.id)) m.set(u.id, u);
+    return m;
+  }, [available]);
+
   // The sell-time add-on picker. Shares the ["addons"] cache with the Add-ons
   // page, so opening this drawer after visiting that page costs nothing.
   const fetchAddons = useServerFn(listAddons);
@@ -158,13 +168,18 @@ export function AddToCartDrawer() {
     setLines((prev) => {
       const used = new Set(prev.map((l) => l.stockItemId).filter(Boolean));
       let changed = false;
+      // `used` only ever grows, so the hunt for the next free unit never has to
+      // look back: one cursor walked forward across `available` picks the same
+      // units .find() did, in a single pass instead of one pass per line.
+      let cursor = 0;
       const next = prev.map((l) => {
         // A unit that was picked up by another cart while this drawer was open
         // is no longer ours to sell — drop it and take the next free one.
-        const stillAvailable = !!l.stockItemId && available.some((a) => a.id === l.stockItemId);
+        const stillAvailable = !!l.stockItemId && availableById.has(l.stockItemId);
         if (stillAvailable) return l;
 
-        const free = available.find((a) => !used.has(a.id));
+        while (cursor < available.length && used.has(available[cursor].id)) cursor++;
+        const free = cursor < available.length ? available[cursor] : undefined;
         if (free) {
           used.add(free.id);
           changed = true;
@@ -178,7 +193,19 @@ export function AddToCartDrawer() {
       });
       return changed ? next : prev;
     });
-  }, [available, lines]);
+  }, [available, availableById, lines]);
+
+  // How many lines currently hold each unit. optionsFor() rebuilt a Set over
+  // every line on each call and is called once per line while rendering;
+  // counting once keeps the duplicate handling identical — a unit held by
+  // another line stays out of this line's list — without the repeated scan.
+  const takenCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of lines) {
+      if (l.stockItemId) m.set(l.stockItemId, (m.get(l.stockItemId) ?? 0) + 1);
+    }
+    return m;
+  }, [lines]);
 
   if (!product) return null;
 
@@ -186,13 +213,9 @@ export function AddToCartDrawer() {
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
 
   const optionsFor = (idx: number) => {
-    const taken = new Set(
-      lines
-        .filter((_, i) => i !== idx)
-        .map((l) => l.stockItemId)
-        .filter(Boolean),
-    );
-    return available.filter((a) => !taken.has(a.id));
+    const own = lines[idx]?.stockItemId;
+    // held by some line other than this one -> not offered here
+    return available.filter((a) => (takenCount.get(a.id) ?? 0) - (a.id === own ? 1 : 0) === 0);
   };
 
   const numOr0 = (s: string) => (s === "" ? 0 : Math.max(0, Number(s) || 0));
@@ -232,7 +255,7 @@ export function AddToCartDrawer() {
 
   const totals = lines.reduce(
     (acc, l) => {
-      const unit = available.find((a) => a.id === l.stockItemId);
+      const unit = availableById.get(l.stockItemId);
       acc.selling += numOr0(l.selling_price);
       acc.cost += unit ? unit.purchase_price : Number(product.purchase_price) || 0;
       // Add-ons never touch revenue — they come off the margin instead.
@@ -260,7 +283,7 @@ export function AddToCartDrawer() {
     if (incomplete) return toast.error("Fill the customer details and every line");
 
     const entryLines: EntryLine[] = lines.map((l) => {
-      const unit = available.find((a) => a.id === l.stockItemId);
+      const unit = availableById.get(l.stockItemId);
       const selling = numOr0(l.selling_price);
       return {
         stockItemId: l.stockItemId,
@@ -443,7 +466,7 @@ export function AddToCartDrawer() {
             <div className="space-y-3">
               {lines.map((line, idx) => {
                 const opts = optionsFor(idx);
-                const selected = available.find((a) => a.id === line.stockItemId);
+                const selected = availableById.get(line.stockItemId);
                 return (
                   <div
                     key={idx}

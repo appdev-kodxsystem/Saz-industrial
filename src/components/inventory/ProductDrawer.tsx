@@ -2,7 +2,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { type ProductRow } from "@/lib/inventory.functions";
 import { stockStatusOf } from "./InventoryCard";
 import { StockBadge } from "./StockBadge";
-import { FileText, TrendingUp, History, Package } from "lucide-react";
+import { TrendingUp, Package } from "lucide-react";
 
 const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR" });
 

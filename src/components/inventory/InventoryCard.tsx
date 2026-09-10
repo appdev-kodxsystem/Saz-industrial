@@ -1,5 +1,4 @@
 import {
-  Minus,
   Plus,
   MoreHorizontal,
   Pin,
@@ -41,8 +40,6 @@ interface Props {
    *  read and sell affordances (view details, add to cart). */
   canManage?: boolean;
 }
-
-const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR" });
 
 export function InventoryCard({
   product,

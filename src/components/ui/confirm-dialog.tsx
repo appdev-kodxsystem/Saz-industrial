@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2, AlertTriangle, LogOut } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -80,5 +80,3 @@ export function ConfirmDialog({
     </AlertDialog>
   );
 }
-
-export { LogOut as LogOutIcon };

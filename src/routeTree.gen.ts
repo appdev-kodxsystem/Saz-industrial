@@ -10,7 +10,6 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
-import { Route as DebugFiledropRouteImport } from './routes/debug-filedrop'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
@@ -31,11 +30,6 @@ import { Route as AuthenticatedAddonsAddonIdEditRouteImport } from './routes/_au
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
   path: '/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DebugFiledropRoute = DebugFiledropRouteImport.update({
-  id: '/debug-filedrop',
-  path: '/debug-filedrop',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -127,7 +121,6 @@ const AuthenticatedAddonsAddonIdEditRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
-  '/debug-filedrop': typeof DebugFiledropRoute
   '/reset-password': typeof ResetPasswordRoute
   '/inventory': typeof AuthenticatedInventoryRoute
   '/organization': typeof AuthenticatedOrganizationRoute
@@ -146,7 +139,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
-  '/debug-filedrop': typeof DebugFiledropRoute
   '/reset-password': typeof ResetPasswordRoute
   '/inventory': typeof AuthenticatedInventoryRoute
   '/organization': typeof AuthenticatedOrganizationRoute
@@ -167,7 +159,6 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
-  '/debug-filedrop': typeof DebugFiledropRoute
   '/reset-password': typeof ResetPasswordRoute
   '/_authenticated/inventory': typeof AuthenticatedInventoryRoute
   '/_authenticated/organization': typeof AuthenticatedOrganizationRoute
@@ -188,7 +179,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/auth'
-    | '/debug-filedrop'
     | '/reset-password'
     | '/inventory'
     | '/organization'
@@ -207,7 +197,6 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/auth'
-    | '/debug-filedrop'
     | '/reset-password'
     | '/inventory'
     | '/organization'
@@ -227,7 +216,6 @@ export interface FileRouteTypes {
     | '/'
     | '/_authenticated'
     | '/auth'
-    | '/debug-filedrop'
     | '/reset-password'
     | '/_authenticated/inventory'
     | '/_authenticated/organization'
@@ -248,7 +236,6 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
-  DebugFiledropRoute: typeof DebugFiledropRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
 }
 
@@ -259,13 +246,6 @@ declare module '@tanstack/react-router' {
       path: '/reset-password'
       fullPath: '/reset-password'
       preLoaderRoute: typeof ResetPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/debug-filedrop': {
-      id: '/debug-filedrop'
-      path: '/debug-filedrop'
-      fullPath: '/debug-filedrop'
-      preLoaderRoute: typeof DebugFiledropRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth': {
@@ -423,7 +403,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
-  DebugFiledropRoute: DebugFiledropRoute,
   ResetPasswordRoute: ResetPasswordRoute,
 }
 export const routeTree = rootRouteImport

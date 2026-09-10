@@ -118,40 +118,6 @@ export const togglePin = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-export const duplicateProduct = createServerFn({ method: "POST" })
-  .middleware([requireOrgAdmin])
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
-  .handler(async ({ context, data }) => {
-    const { data: src, error: e1 } = await context.supabase
-      .from("products")
-      .select("*")
-      .eq("id", data.id)
-      .eq("org_id", context.orgId)
-      .single<ProductRow>();
-    if (e1 || !src) throw new Error(e1?.message ?? "Not found");
-    const copy = {
-      org_id: context.orgId,
-      user_id: context.userId,
-      name: `${src.name} (copy)`,
-      sku: `${src.sku}-C`,
-      image_url: src.image_url,
-      category: src.category,
-      description: src.description,
-      stock: src.stock,
-      reorder_at: src.reorder_at,
-      purchase_price: src.purchase_price,
-      selling_price: src.selling_price,
-      pinned: false,
-    };
-    const { data: row, error } = await context.supabase
-      .from("products")
-      .insert(copy)
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
-    return row as unknown as ProductRow;
-  });
-
 export const deleteProduct = createServerFn({ method: "POST" })
   .middleware([requireOrgAdmin])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
@@ -163,84 +129,6 @@ export const deleteProduct = createServerFn({ method: "POST" })
       .eq("org_id", context.orgId);
     if (error) throw new Error(error.message);
     return { ok: true };
-  });
-
-const DEMO = [
-  {
-    name: "Apex Mitre Saw Pro X1",
-    sku: "MS-402-B",
-    category: "Power Tools",
-    description: "Industrial-grade mitre saw with dual-bevel and integrated laser guide.",
-    stock: 48,
-    reorder_at: 10,
-    purchase_price: 312,
-    selling_price: 499,
-  },
-  {
-    name: "Isotope Torque Wrench",
-    sku: "TW-99",
-    category: "Hand Tools",
-    description: "Calibrated click-style torque wrench with locking collar.",
-    stock: 4,
-    reorder_at: 8,
-    purchase_price: 62,
-    selling_price: 124.5,
-  },
-  {
-    name: "Carbon Digital Calipers",
-    sku: "CC-01",
-    category: "Precision Instruments",
-    description: "0-150mm carbon-fiber calipers with 0.01mm resolution.",
-    stock: 22,
-    reorder_at: 6,
-    purchase_price: 28,
-    selling_price: 59,
-  },
-  {
-    name: "Helius Safety Goggles",
-    sku: "HG-05",
-    category: "Safety Equipment",
-    description: "ANSI Z87.1+ rated clear polycarbonate goggles.",
-    stock: 132,
-    reorder_at: 20,
-    purchase_price: 6,
-    selling_price: 18,
-  },
-  {
-    name: "Flux Soldering Station",
-    sku: "SX-200",
-    category: "Electronics",
-    description: "60W digital soldering station, ESD-safe ceramic heater.",
-    stock: 9,
-    reorder_at: 10,
-    purchase_price: 84,
-    selling_price: 169,
-  },
-  {
-    name: "Neon Laser Level",
-    sku: "LL-12",
-    category: "Precision Instruments",
-    description: "Self-leveling green-beam cross-line laser, IP65.",
-    stock: 17,
-    reorder_at: 5,
-    purchase_price: 110,
-    selling_price: 229,
-  },
-];
-
-export const seedDemoProducts = createServerFn({ method: "POST" })
-  .middleware([requireOrgAdmin])
-  .handler(async ({ context }) => {
-    const rows = DEMO.map((p) => ({
-      ...p,
-      org_id: context.orgId,
-      user_id: context.userId,
-      image_url: null,
-      pinned: false,
-    }));
-    const { error } = await context.supabase.from("products").insert(rows);
-    if (error) throw new Error(error.message);
-    return { inserted: rows.length };
   });
 
 // If `err` is a Postgres "relation does not exist" error for a known table,
@@ -666,30 +554,6 @@ export const createStockOrder = createServerFn({ method: "POST" })
     };
   });
 
-export const peekNextStockItem = createServerFn({ method: "GET" })
-  .middleware([requireOrgMember])
-  .inputValidator((d: unknown) => z.object({ productId: z.string().uuid() }).parse(d))
-  .handler(async ({ context, data }) => {
-    const { data: item, error } = await context.supabase
-      .from("stock_items")
-      .select("*")
-      .eq("product_id", data.productId)
-      .eq("sold", false)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    return item ?? null;
-  });
-
-// Shared schema for the optional payment/customer fields captured at sale time.
-const salePaymentInput = {
-  selling_price: z.number().min(0).optional(),
-  net_payment: z.number().min(0).optional(),
-  customer_name: z.string().max(200).nullable().optional(),
-  customer_contact: z.string().max(200).nullable().optional(),
-};
-
 // Build the sale insert payload, deriving pending balance + payment status.
 // net_payment defaults to the full selling price (fully paid) when omitted, so
 // callers that don't pass payment info keep the original "no pending" behavior.
@@ -776,23 +640,6 @@ async function addonCostBySale(
   return map;
 }
 
-// Fetch the product fields snapshotted onto a sale. Returns nulls if absent.
-async function fetchProductSnapshot(
-  supabase: any,
-  productId: string,
-): Promise<{ name: string | null; sku: string | null; image_url: string | null }> {
-  const { data } = await supabase
-    .from("products")
-    .select("name, sku, image_url")
-    .eq("id", productId)
-    .maybeSingle();
-  return {
-    name: data?.name ?? null,
-    sku: data?.sku ?? null,
-    image_url: data?.image_url ?? null,
-  };
-}
-
 // Attach the free add-ons chosen at the till to the sale rows just written.
 //
 // One RPC for the whole cart rather than one per line: addon_attach_bulk runs
@@ -834,80 +681,6 @@ async function attachCartAddons(
   }
   return { addonCost: Number(data) || 0, addonWarning: null };
 }
-
-export const sellOneFromStock = createServerFn({ method: "POST" })
-  .middleware([requireOrgMember])
-  .inputValidator((d: unknown) =>
-    z.object({ productId: z.string().uuid(), ...salePaymentInput }).parse(d),
-  )
-  .handler(async ({ context, data }) => {
-    // find next stock item
-    let next: StockItemRow | null = null;
-    try {
-      const res = await context.supabase
-        .from("stock_items")
-        .select("*")
-        .eq("product_id", data.productId)
-        .eq("sold", false)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (res.error) throw res.error;
-      next = res.data;
-    } catch (err: any) {
-      const hint = missingTableMessage(err, true);
-      if (hint) throw new Error(hint);
-      throw err;
-    }
-    if (!next) throw new Error("No stock available");
-
-    // mark stock item sold
-    let updated: StockItemRow;
-    try {
-      const res = await context.supabase
-        .from("stock_items")
-        .update({ sold: true, sold_at: new Date().toISOString() })
-        .eq("id", next.id)
-        .select()
-        .single();
-      if (res.error) throw res.error;
-      updated = res.data;
-    } catch (err: any) {
-      const hint = missingTableMessage(err, true);
-      if (hint) throw new Error(hint);
-      throw err;
-    }
-
-    // record sale
-    const snap = await fetchProductSnapshot(context.supabase, data.productId);
-    const saleRow = buildSaleRow({
-      product_id: data.productId,
-      stock_item_id: next.id,
-      org_id: context.orgId,
-      user_id: context.userId,
-      product_name: snap.name,
-      product_sku: snap.sku,
-      product_image_url: snap.image_url,
-      selling_price: data.selling_price,
-      net_payment: data.net_payment,
-      customer_name: data.customer_name,
-      customer_contact: data.customer_contact,
-    });
-    let sale: SaleRow;
-    try {
-      const res = await context.supabase.from("sales").insert(saleRow).select().single();
-      if (res.error) throw res.error;
-      sale = res.data;
-    } catch (err: any) {
-      const hint = missingTableMessage(err, true);
-      if (hint) throw new Error(hint);
-      throw err;
-    }
-
-    await applyStockDelta(context.supabase, data.productId, -1);
-
-    return { sale, stock_item: updated };
-  });
 
 export interface ProfitSaleRow {
   created_at: string;
@@ -1131,9 +904,15 @@ export const getAvailableStockItems = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => z.object({ productId: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
     try {
+      // The cart drawer projects each unit down to exactly these three fields
+      // the moment it receives them, so selecting the whole row shipped the
+      // product_name / product_sku / product_image_url snapshots on every unit
+      // for nothing. A product with a lot of unsold units made that the
+      // heaviest part of opening the drawer. created_at is kept only because
+      // the sort below orders by it.
       const { data: items, error } = await context.supabase
         .from("stock_items")
-        .select("*")
+        .select("id, manufacture_id, purchase_price, created_at")
         .eq("product_id", data.productId)
         .eq("sold", false)
         .order("created_at", { ascending: true });
@@ -1144,63 +923,6 @@ export const getAvailableStockItems = createServerFn({ method: "GET" })
         return rows.map((it) => ({ ...it, purchase_price: 0 }));
       }
       return rows;
-    } catch (err: any) {
-      const hint = missingTableMessage(err, true);
-      if (hint) throw new Error(hint);
-      throw err;
-    }
-  });
-
-export const sellStockItem = createServerFn({ method: "POST" })
-  .middleware([requireOrgMember])
-  .inputValidator((d: unknown) =>
-    z.object({ stockItemId: z.string().uuid(), ...salePaymentInput }).parse(d),
-  )
-  .handler(async ({ context, data }) => {
-    // mark item sold
-    try {
-      const res = await context.supabase
-        .from("stock_items")
-        .select("*")
-        .eq("id", data.stockItemId)
-        .maybeSingle();
-      if (res.error) throw res.error;
-      const item = res.data;
-      if (!item) throw new Error("Stock item not found");
-      if (item.sold) throw new Error("Stock item already sold");
-      if (!item.product_id) throw new Error("Product no longer exists");
-      const productId = item.product_id;
-
-      const res2 = await context.supabase
-        .from("stock_items")
-        .update({ sold: true, sold_at: new Date().toISOString() })
-        .eq("id", data.stockItemId)
-        .select()
-        .single();
-      if (res2.error) throw res2.error;
-      const updated = res2.data;
-
-      const snap = await fetchProductSnapshot(context.supabase, productId);
-      const saleRow = buildSaleRow({
-        product_id: productId,
-        stock_item_id: item.id,
-        org_id: context.orgId,
-        user_id: context.userId,
-        product_name: snap.name,
-        product_sku: snap.sku,
-        product_image_url: snap.image_url,
-        selling_price: data.selling_price,
-        net_payment: data.net_payment,
-        customer_name: data.customer_name,
-        customer_contact: data.customer_contact,
-      });
-      const res3 = await context.supabase.from("sales").insert(saleRow).select().single();
-      if (res3.error) throw res3.error;
-      const sale = res3.data;
-
-      await applyStockDelta(context.supabase, productId, -1);
-
-      return { sale, stock_item: updated };
     } catch (err: any) {
       const hint = missingTableMessage(err, true);
       if (hint) throw new Error(hint);
@@ -1906,12 +1628,19 @@ export const listPurchasesPage = createServerFn({ method: "GET" })
     const total = merged.length;
     let totalSpend = 0;
     let stillInStock = 0;
+    // Batch ids are primary keys and every add-on row is built from one batch,
+    // so this resolves the same rows the per-row .find() did. That scan walked
+    // the whole batch list once per add-on row, which on a page that reloads
+    // every 15s made the stats cost grow with the square of the purchase
+    // history.
+    const batchById = new Map<string, BatchSel>();
+    for (const b of batches) if (!batchById.has(b.id)) batchById.set(b.id, b);
     for (const r of merged) {
       totalSpend += r.amount;
       // Units still on the shelf: unsold machines, plus whatever is left of an
       // add-on batch.
       if (r.stream === "addon") {
-        const b = batches.find((x) => x.id === r.id);
+        const b = batchById.get(r.id);
         stillInStock += Number(b?.remaining) || 0;
       } else if (!r.sold) {
         stillInStock += 1;

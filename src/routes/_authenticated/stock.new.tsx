@@ -200,6 +200,22 @@ function NewStockOrderPage() {
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const addonById = useMemo(() => new Map(addons.map((a) => [a.id, a])), [addons]);
 
+  // The picker lists the whole catalogue and asks "is this one already on the
+  // order?" for every row it draws. Scanning the order line-by-line per row
+  // made that catalogue-length x order-length, and it re-ran on every
+  // keystroke in the search box. Both lists are keyed uniquely, so first-wins
+  // insertion returns what .find() returned.
+  const lineByProductId = useMemo(() => {
+    const m = new Map<string, Line>();
+    for (const l of lines) if (!m.has(l.productId)) m.set(l.productId, l);
+    return m;
+  }, [lines]);
+  const addonLineByAddonId = useMemo(() => {
+    const m = new Map<string, AddonLine>();
+    for (const l of addonLines) if (!m.has(l.addonId)) m.set(l.addonId, l);
+    return m;
+  }, [addonLines]);
+
   // Arriving from an inventory card's "Add stock" — start the order with that
   // product already on it.
   useEffect(() => {
@@ -565,7 +581,7 @@ function NewStockOrderPage() {
               ) : (
                 <div className="space-y-2">
                   {filteredAddons.map((a) => {
-                    const line = addonLines.find((l) => l.addonId === a.id);
+                    const line = addonLineByAddonId.get(a.id);
                     return (
                       <button
                         key={a.id}
@@ -622,7 +638,7 @@ function NewStockOrderPage() {
             ) : (
               <div className="space-y-2">
                 {filtered.map((p) => {
-                  const line = lines.find((l) => l.productId === p.id);
+                  const line = lineByProductId.get(p.id);
                   return (
                     <button
                       key={p.id}

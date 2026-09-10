@@ -1,6 +1,5 @@
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import FileDrop from "@/components/ui/file-drop";
 import { Loader2, Mail, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -33,34 +32,6 @@ function AuthPage() {
       if (data.session) navigate({ to: "/inventory", replace: true });
     });
   }, [navigate]);
-
-  // Quick debug route: append ?debug=1 to test FileDrop without auth
-  if (
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("debug") === "1"
-  ) {
-    const [file, setFile] = useState<File | null>(null);
-    const [preview, setPreview] = useState<string | null>(null);
-    function handleFile(f: File | null) {
-      setFile(f);
-      if (!f) return setPreview(null);
-      const r = new FileReader();
-      r.onload = () => setPreview(r.result as string);
-      r.readAsDataURL(f);
-    }
-    return (
-      <div className="min-h-screen bg-background text-foreground p-6">
-        <h1 className="mb-4 text-lg font-semibold">Debug FileDrop (auth)</h1>
-        <FileDrop
-          file={file}
-          previewUrl={preview}
-          onChange={handleFile}
-          accept={"image/*,application/pdf"}
-        />
-        <div className="mt-4">Selected: {file ? file.name : "(none)"}</div>
-      </div>
-    );
-  }
 
   async function onEmailSubmit(e: React.FormEvent) {
     e.preventDefault();

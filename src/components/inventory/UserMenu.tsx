@@ -1,4 +1,4 @@
-import { Menu, LogOut, User as UserIcon } from "lucide-react";
+import { LogOut, User as UserIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -113,16 +113,5 @@ export function UserMenu() {
         onConfirm={handleSignOut}
       />
     </DropdownMenu>
-  );
-}
-
-export function MobileMenuButton() {
-  return (
-    <button
-      aria-label="Menu"
-      className="sm:hidden grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground"
-    >
-      <Menu className="size-4" />
-    </button>
   );
 }
