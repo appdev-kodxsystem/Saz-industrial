@@ -75,12 +75,16 @@ export function UserMenu() {
             <span className="mt-1 flex items-center gap-1.5">
               <span
                 className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-                  role === "admin" ? "bg-primary/10 text-primary" : "bg-secondary text-muted-foreground"
+                  role === "admin"
+                    ? "bg-primary/10 text-primary"
+                    : "bg-secondary text-muted-foreground"
                 }`}
               >
                 {role === "admin" ? "Admin" : "Employee"}
               </span>
-              <span className="truncate text-[11px] font-normal text-muted-foreground">{org.name}</span>
+              <span className="truncate text-[11px] font-normal text-muted-foreground">
+                {org.name}
+              </span>
             </span>
           </span>
         </DropdownMenuLabel>

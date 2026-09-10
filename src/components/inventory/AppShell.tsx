@@ -1,7 +1,7 @@
 "use client";
 
 import { Link, useLocation } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BarChart3,
   Boxes,
@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { UserMenu } from "@/components/inventory/UserMenu";
-import { CartButton } from "@/components/cart/CartButton";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useOrg } from "@/hooks/use-org";
@@ -50,8 +49,7 @@ const GROUPS: NavGroup[] = [
     label: "Operations",
     // Sales and Purchases sit next to each other on purpose: they are the two
     // sides of the same ledger (money out, money in) and get compared against
-    // each other constantly. Purchases used to live two groups away, under
-    // Stock, which made that comparison a hunt.
+    // each other constantly.
     items: [
       { to: "/inventory", label: "Inventory", icon: Boxes },
       // Add-ons sit next to Inventory because they are the other half of what
@@ -69,7 +67,13 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/products/new", label: "Add Product", icon: PlusCircle, adminOnly: true, exact: true },
       { to: "/addons/new", label: "Add Add-on", icon: Gift, adminOnly: true, exact: true },
-      { to: "/stock/new", label: "Add Stock", icon: PackagePlus, adminOnly: true, exact: true },
+      {
+        to: "/purchases/new",
+        label: "Add Purchase",
+        icon: PackagePlus,
+        adminOnly: true,
+        exact: true,
+      },
     ],
   },
   {
@@ -197,14 +201,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div
-            className={`flex shrink-0 items-center gap-2 border-t border-hairline p-3 ${
-              collapsed ? "flex-col" : ""
+            className={`flex shrink-0 items-center border-t border-hairline p-3 ${
+              collapsed ? "justify-center" : "justify-end"
             }`}
           >
-            <CartButton />
-            <div className={collapsed ? "" : "ml-auto"}>
-              <UserMenu />
-            </div>
+            <UserMenu />
           </div>
         </aside>
 
@@ -263,10 +264,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span className="truncate text-sm font-semibold tracking-tight">SAZ Industrial</span>
             </Link>
 
-            <div className="flex items-center gap-2">
-              <CartButton />
-              <UserMenu />
-            </div>
+            <UserMenu />
           </div>
         </header>
 
@@ -368,8 +366,32 @@ export function PageHeader({
   children?: React.ReactNode;
 }) {
   const hasTopRow = title || subtitle || actions || meta;
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Anything below that wants to pin itself directly under this bar needs its
+  // height, and that height is NOT a constant: a page can hand it a filter row
+  // as `children`, which makes it roughly twice as tall. Panels that guessed at
+  // a fixed offset ended up tucked under it. Publish the real measurement and
+  // let them read it.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const write = () =>
+      document.documentElement.style.setProperty("--page-header-h", `${el.offsetHeight}px`);
+    write();
+    const ro = new ResizeObserver(write);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty("--page-header-h");
+    };
+  }, []);
+
   return (
-    <div className="sticky top-14 z-20 border-b border-hairline bg-background/80 backdrop-blur-md lg:top-0">
+    <div
+      ref={ref}
+      className="sticky top-14 z-20 border-b border-hairline bg-background/80 backdrop-blur-md lg:top-0"
+    >
       <div className={`flex w-full flex-col gap-3 py-3 lg:min-h-16 lg:justify-center ${PAGE_X}`}>
         {hasTopRow && (
           <div className="flex items-end justify-between gap-3">

@@ -18,6 +18,7 @@ import {
 import { getProfitSeries, type ProfitSaleRow } from "@/lib/inventory.functions";
 import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { PrintReportDialog } from "@/components/inventory/PrintReportDialog";
+import { DateFilter, rangeLabel, useDateFilter } from "@/components/inventory/DateFilter";
 
 export const Route = createFileRoute("/_authenticated/reports")({
   head: () => ({
@@ -146,8 +147,69 @@ function buildBuckets(kind: RangeKind): Bucket[] {
   return out;
 }
 
-function bucketize(sales: ProfitSaleRow[], kind: RangeKind): Bucket[] {
-  const buckets = buildBuckets(kind);
+/**
+ * Divide a hand-picked range into a readable number of buckets.
+ *
+ * The fixed ranges know their own shape ("last 12 months"); a custom range does
+ * not, so the unit is chosen from how long it is — a fortnight reads best by
+ * day, two years by month. Anything else produces either one fat bar or three
+ * hundred hairlines.
+ */
+function buildCustomBuckets(from: number, to: number): Bucket[] {
+  const out: Bucket[] = [];
+  if (!from || !to || to <= from) return out;
+  const days = (to - from) / 86_400_000;
+  const blank = { revenue: 0, cost: 0, profit: 0, count: 0 };
+
+  if (days <= 31) {
+    const cur = new Date(from);
+    cur.setHours(0, 0, 0, 0);
+    while (cur.getTime() < to) {
+      const start = new Date(cur);
+      const end = new Date(cur);
+      end.setDate(end.getDate() + 1);
+      out.push({
+        label: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        start: start.getTime(),
+        end: end.getTime(),
+        ...blank,
+      });
+      cur.setDate(cur.getDate() + 1);
+    }
+  } else if (days <= 182) {
+    const cur = startOfWeek(new Date(from));
+    while (cur.getTime() < to) {
+      const start = new Date(cur);
+      const end = new Date(cur);
+      end.setDate(end.getDate() + 7);
+      out.push({
+        label: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        start: start.getTime(),
+        end: end.getTime(),
+        ...blank,
+      });
+      cur.setDate(cur.getDate() + 7);
+    }
+  } else {
+    const first = new Date(from);
+    const cur = new Date(first.getFullYear(), first.getMonth(), 1);
+    while (cur.getTime() < to) {
+      const start = new Date(cur);
+      const end = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+      out.push({
+        label: start.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+        start: start.getTime(),
+        end: end.getTime(),
+        ...blank,
+      });
+      cur.setMonth(cur.getMonth() + 1);
+    }
+  }
+  return out;
+}
+
+function bucketize(sales: ProfitSaleRow[], kind: RangeKind, custom?: Bucket[]): Bucket[] {
+  const buckets = custom?.length ? custom : buildBuckets(kind);
   if (!buckets.length) return buckets;
   const min = buckets[0].start;
   const max = buckets[buckets.length - 1].end;
@@ -167,16 +229,30 @@ function bucketize(sales: ProfitSaleRow[], kind: RangeKind): Bucket[] {
 
 function ReportsPage() {
   const [range, setRange] = useState<RangeKind>("monthly");
+  // The preset chips answer "how do I want this bucketed"; the date filter
+  // answers "over what window". A custom window takes over both, because a
+  // hand-picked range has no natural bucket size of its own.
+  const { period, range: dates, onChange } = useDateFilter("all");
+  const isCustom = period === "custom";
   const profitSeries = useServerFn(getProfitSeries);
 
   const { data: sales = [] } = useQuery({
-    queryKey: ["profit-series"],
-    queryFn: () => profitSeries(),
+    queryKey: ["profit-series", isCustom ? dates.from : 0, isCustom ? dates.to : 0],
+    queryFn: () =>
+      profitSeries({ data: isCustom ? { from: dates.from, to: dates.to } : { from: 0, to: 0 } }),
     refetchInterval: 15_000, // real-time-ish: poll every 15s
     refetchOnWindowFocus: true,
   });
 
-  const buckets = useMemo(() => bucketize(sales, range), [sales, range]);
+  const customBuckets = useMemo(
+    () => (isCustom ? buildCustomBuckets(dates.from, dates.to) : []),
+    [isCustom, dates.from, dates.to],
+  );
+
+  const buckets = useMemo(
+    () => bucketize(sales, range, customBuckets),
+    [sales, range, customBuckets],
+  );
 
   const totals = useMemo(() => {
     const revenue = buckets.reduce((a, b) => a + b.revenue, 0);
@@ -201,12 +277,19 @@ function ReportsPage() {
         subtitle="Performance at a glance"
         actions={<PrintReportDialog />}
       >
-        <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1">
-          {RANGES.map((r) => (
-            <Chip key={r.id} active={range === r.id} onClick={() => setRange(r.id)}>
-              {r.label}
-            </Chip>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Bucket size — greyed out while a custom window drives it. */}
+          <div
+            className={`-mx-1 flex items-center gap-2 overflow-x-auto px-1 ${isCustom ? "pointer-events-none opacity-40" : ""}`}
+          >
+            {RANGES.map((r) => (
+              <Chip key={r.id} active={range === r.id} onClick={() => setRange(r.id)}>
+                {r.label}
+              </Chip>
+            ))}
+          </div>
+          <span aria-hidden className="mx-1 hidden h-4 w-px bg-hairline sm:block" />
+          <DateFilter period={period} range={dates} onChange={onChange} />
         </div>
       </PageHeader>
 
@@ -227,13 +310,15 @@ function ReportsPage() {
             <TrendingUp className="size-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">
               Profit —{" "}
-              {range === "daily"
-                ? "last 14 days"
-                : range === "weekly"
-                  ? "last 8 weeks"
-                  : range === "monthly"
-                    ? "last 12 months"
-                    : "last 6 years"}
+              {isCustom
+                ? rangeLabel("custom", dates)
+                : range === "daily"
+                  ? "last 14 days"
+                  : range === "weekly"
+                    ? "last 8 weeks"
+                    : range === "monthly"
+                      ? "last 12 months"
+                      : "last 6 years"}
             </h2>
           </div>
           <div className="h-72 w-full">

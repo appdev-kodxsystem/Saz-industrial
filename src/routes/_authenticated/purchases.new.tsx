@@ -24,17 +24,19 @@ import FileDrop from "@/components/ui/file-drop";
 import { supabase } from "@/integrations/supabase/client";
 import { supabaseThumb } from "@/lib/img";
 import { useOrg } from "@/hooks/use-org";
-import { createStockOrder, listProducts, type ProductRow } from "@/lib/inventory.functions";
+import { createPurchase, listProducts, type ProductRow } from "@/lib/inventory.functions";
 import { listAddons, type AddonRow } from "@/lib/addons.functions";
+import { AddonBadge } from "@/components/inventory/AddonBadge";
 
-export const Route = createFileRoute("/_authenticated/stock/new")({
-  head: () => ({ meta: [{ title: "Add Stock — SAZ Industrial" }] }),
-  // Admin-only: this is stock-in, and it carries purchase cost.
+export const Route = createFileRoute("/_authenticated/purchases/new")({
+  head: () => ({ meta: [{ title: "New Purchase — SAZ Industrial" }] }),
+  // Admin-only: this records purchase cost, and cost is what makes margin
+  // derivable.
   beforeLoad: ({ context }) => {
     if (!context.isAdmin) throw redirect({ to: "/inventory" });
   },
   validateSearch: z.object({ product: z.string().optional(), addon: z.string().optional() }),
-  component: NewStockOrderPage,
+  component: NewPurchasePage,
 });
 
 const fmt = new Intl.NumberFormat("en-US", {
@@ -158,15 +160,19 @@ function fitUnitPrices(l: Line, quantity: number): string[] {
 }
 
 /**
- * Stock-in as one order rather than one product at a time: pick a machine, set
- * how many arrived and what they cost, pick the next machine, repeat — then
- * attach the supplier's receipt and commit the lot in a single write.
+ * A purchase: pick what you bought, set how many arrived and what each cost,
+ * attach the supplier's receipt, and commit the lot in a single write.
+ *
+ * One purchase can span as many products and add-ons as you like — that is the
+ * point of it being a purchase rather than a per-product stock-in. It lands as
+ * ONE row on the Purchases page, with every line and every unit price readable
+ * on its detail page.
  *
  * Manufacture ids are NOT collected here. They are generated per product on the
  * server (`<SKU>-0001`, `-0002`, …), which is what removed the longest part of
  * this form.
  */
-function NewStockOrderPage() {
+function NewPurchasePage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { product: preselect, addon: preselectAddon } = Route.useSearch();
@@ -174,7 +180,7 @@ function NewStockOrderPage() {
 
   const list = useServerFn(listProducts);
   const listAddonsFn = useServerFn(listAddons);
-  const submitOrder = useServerFn(createStockOrder);
+  const submitOrder = useServerFn(createPurchase);
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["products"],
     queryFn: () => list(),
@@ -216,7 +222,7 @@ function NewStockOrderPage() {
     return m;
   }, [addonLines]);
 
-  // Arriving from an inventory card's "Add stock" — start the order with that
+  // Arriving from an inventory card's "Buy more" — start the purchase with that
   // product already on it.
   useEffect(() => {
     if (!preselect || !byId.has(preselect)) return;
@@ -256,12 +262,10 @@ function NewStockOrderPage() {
     );
   }, [products, query]);
 
-  // Retired add-ons can't be restocked — restore them on the Add-ons page first.
   const filteredAddons = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const live = addons.filter((a) => a.active);
-    if (!q) return live;
-    return live.filter(
+    if (!q) return addons;
+    return addons.filter(
       (a) =>
         a.name.toLowerCase().includes(q) ||
         a.code.toLowerCase().includes(q) ||
@@ -426,7 +430,7 @@ function NewStockOrderPage() {
     addonLines.some((l) => !addonLineComplete(l));
 
   async function submit() {
-    if (nothingOnOrder) return toast.error("Add at least one machine or add-on to the order");
+    if (nothingOnOrder) return toast.error("Add at least one product or add-on to the purchase");
     if (lines.some((l) => !lineComplete(l)))
       return toast.error("Every unit needs a purchase price");
     if (addonLines.some((l) => !addonLineComplete(l)))
@@ -435,15 +439,15 @@ function NewStockOrderPage() {
     setSubmitting(true);
     try {
       // Upload the receipt first: if storage rejects it we stop here, rather
-      // than writing an order that claims to have a receipt it doesn't have.
+      // than writing a purchase that claims to have a receipt it doesn't have.
       let receipt_path: string | null = null;
       if (receipt) {
         const safe = receipt.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        // The `receipts` bucket's policies only check "is authenticated", not
-        // which org an object belongs to, so a guessable path would be readable
-        // across tenants. The random segment is what makes it unguessable —
-        // the org folder is for humans reading the bucket, not for access.
-        const path = `stock-orders/${org.id}/${crypto.randomUUID()}_${safe}`;
+        // Org id FIRST: the bucket's INSERT policy checks that leading segment
+        // against current_org_id(), and its SELECT policy uses it to let the
+        // rest of the org — an admin reviewing the books, say — open what an
+        // employee attached. The random segment keeps the path unguessable.
+        const path = `${org.id}/stock-orders/${crypto.randomUUID()}_${safe}`;
         const { error } = await supabase.storage
           .from("receipts")
           .upload(path, receipt, { upsert: false });
@@ -473,10 +477,10 @@ function NewStockOrderPage() {
       if (res.unitCount) parts.push(`${res.unitCount} unit(s) — ${fmt.format(res.totalCost)}`);
       if (res.addonUnitCount)
         parts.push(`${res.addonUnitCount} add-on(s) — ${fmt.format(res.addonCost)}`);
-      toast.success(`Stock received: ${parts.join(" · ")}`);
+      toast.success(`Purchase recorded: ${parts.join(" · ")}`);
       navigate({ to: "/purchases" });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to record the stock order");
+      toast.error(err instanceof Error ? err.message : "Failed to record the purchase");
     } finally {
       setSubmitting(false);
     }
@@ -485,11 +489,11 @@ function NewStockOrderPage() {
   return (
     <>
       <PageHeader
-        title="Add stock"
-        subtitle="Build one order across as many machines as you like"
+        title="New purchase"
+        subtitle="One purchase, as many products and add-ons as you like"
         actions={
           <button
-            onClick={() => navigate({ to: "/inventory" })}
+            onClick={() => navigate({ to: "/purchases" })}
             className="inline-flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-2 text-sm font-medium transition hover:bg-accent"
           >
             <ArrowLeft className="size-4" />
@@ -678,7 +682,7 @@ function NewStockOrderPage() {
             )}
           </section>
 
-          {/* ---------------- the order ---------------- */}
+          {/* ---------------- the purchase ---------------- */}
           <section className="lg:sticky lg:top-20 lg:self-start">
             <div className="flex max-h-[calc(100dvh-7rem)] flex-col overflow-hidden rounded-2xl bg-surface ring-1 ring-hairline">
               <header className="flex shrink-0 items-center gap-2.5 border-b border-hairline bg-gradient-to-br from-primary/10 via-surface to-surface px-4 py-4">
@@ -686,7 +690,7 @@ function NewStockOrderPage() {
                   <PackagePlus className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold">This order</div>
+                  <div className="text-sm font-semibold">This purchase</div>
                   <div className="text-xs text-muted-foreground">
                     {totals.units} unit{totals.units === 1 ? "" : "s"}
                     {addonTotals.units > 0 && ` · ${addonTotals.units} add-on`}
@@ -712,7 +716,7 @@ function NewStockOrderPage() {
                     <div className="grid size-14 place-items-center rounded-2xl bg-surface-muted">
                       <PackagePlus className="size-6 text-muted-foreground/40" strokeWidth={1.25} />
                     </div>
-                    <p className="text-sm font-medium">Nothing on this order yet</p>
+                    <p className="text-sm font-medium">Nothing on this purchase yet</p>
                     <p className="text-xs text-muted-foreground">
                       Pick machinery or add-ons on the left to start.
                     </p>
@@ -740,7 +744,20 @@ function NewStockOrderPage() {
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm font-semibold">{p.name}</div>
                                 <div className="truncate text-[11px] text-muted-foreground">
-                                  SKU {p.sku}
+                                  SKU {p.sku} · {p.category}
+                                </div>
+                                {/* What it normally costs and what it sells for,
+                                    on the line where the price is being typed —
+                                    otherwise pricing a purchase means going and
+                                    looking the product up. */}
+                                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                                  <span>{p.stock} in stock</span>
+                                  {Number(p.purchase_price) > 0 && (
+                                    <span>· last {fmt.format(Number(p.purchase_price))}</span>
+                                  )}
+                                  {Number(p.selling_price) > 0 && (
+                                    <span>· sells {fmt.format(Number(p.selling_price))}</span>
+                                  )}
                                 </div>
                               </div>
                               <button
@@ -906,7 +923,12 @@ function NewStockOrderPage() {
                                 <div className="flex items-start gap-2.5">
                                   <AddonThumb url={a.image_url} name={a.name} size="sm" />
                                   <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-semibold">{a.name}</div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="truncate text-sm font-semibold">
+                                        {a.name}
+                                      </span>
+                                      <AddonBadge />
+                                    </div>
                                     <div className="truncate font-mono text-[11px] text-muted-foreground">
                                       {a.code}
                                     </div>
@@ -1080,7 +1102,7 @@ function NewStockOrderPage() {
                   </>
                 )}
 
-                {/* Supplier, note and receipt are always on screen, empty order
+                {/* Supplier, note and receipt are always on screen, empty purchase
                     or not. Tucked inside the line list they only appeared once
                     something had been added, which read as "there is nowhere to
                     attach the receipt". */}
@@ -1103,7 +1125,7 @@ function NewStockOrderPage() {
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <Receipt className="size-3.5 text-muted-foreground" />
                       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Order receipt
+                        Purchase receipt
                       </p>
                       <span className="text-[11px] font-normal normal-case text-muted-foreground/70">
                         photo or PDF
@@ -1138,7 +1160,9 @@ function NewStockOrderPage() {
                     </>
                   )}
                   <div className="flex items-baseline justify-between border-t border-hairline pt-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Order total</span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Purchase total
+                    </span>
                     <span className="text-lg font-bold tabular-nums">
                       {fmt.format(totals.cost + addonTotals.cost)}
                     </span>
@@ -1149,7 +1173,7 @@ function NewStockOrderPage() {
                   disabled={incomplete || submitting}
                   className="w-full rounded-xl bg-gradient-to-r from-primary to-primary/85 py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
                 >
-                  {submitting ? "Recording…" : "Record stock order"}
+                  {submitting ? "Recording…" : "Record purchase"}
                 </button>
                 {!nothingOnOrder && incomplete && (
                   <p className="text-center text-[11px] text-muted-foreground">
@@ -1258,7 +1282,11 @@ function AddonThumb({
       className={`${cls} shrink-0 overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline`}
     >
       {url ? (
-        <img src={supabaseThumb(url, 96)} alt={name} className="h-full w-full object-cover" />
+        <img
+          src={supabaseThumb(url, 96) ?? undefined}
+          alt={name}
+          className="h-full w-full object-cover"
+        />
       ) : (
         <div className="grid h-full w-full place-items-center text-muted-foreground/40">
           <Gift className="size-5" />
@@ -1283,7 +1311,11 @@ function Thumb({
       className={`${cls} shrink-0 overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline`}
     >
       {url ? (
-        <img src={supabaseThumb(url, 96)} alt={name} className="h-full w-full object-cover" />
+        <img
+          src={supabaseThumb(url, 96) ?? undefined}
+          alt={name}
+          className="h-full w-full object-cover"
+        />
       ) : (
         <div className="grid h-full w-full place-items-center text-muted-foreground/40">
           <Package className="size-5" />

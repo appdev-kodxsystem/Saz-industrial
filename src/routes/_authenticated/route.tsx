@@ -2,10 +2,9 @@ import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell } from "@/components/inventory/AppShell";
 import { Toaster } from "@/components/ui/sonner";
-import { CartProvider } from "@/components/cart/cart-context";
-import { CartDrawer } from "@/components/cart/CartDrawer";
-import { AddToCartDrawer } from "@/components/cart/AddToCartDrawer";
 import { getMyOrg, MY_ORG_QUERY_KEY } from "@/lib/org.functions";
+import { TicketProvider } from "@/components/sales/ticket-context";
+import { TicketDock, useDockInset } from "@/components/sales/TicketDock";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
@@ -101,17 +100,34 @@ export const Route = createFileRoute("/_authenticated")({
   component: AuthenticatedLayout,
 });
 
+/**
+ * The ticket provider wraps the WHOLE authenticated app, not just the Sales
+ * page. A sale in progress has to survive walking over to check a purchase or a
+ * price, so the till follows you: <TicketDock> keeps it docked to the right of
+ * every other page, and Sales itself renders it as half the screen.
+ */
 function AuthenticatedLayout() {
   return (
-    <CartProvider>
+    <TicketProvider>
       <div className="min-h-dvh bg-background text-foreground">
         <Toaster position="top-right" />
         <AppShell>
-          <Outlet />
+          <DockedContent>
+            <Outlet />
+          </DockedContent>
         </AppShell>
-        <CartDrawer />
-        <AddToCartDrawer />
+        <TicketDock />
       </div>
-    </CartProvider>
+    </TicketProvider>
+  );
+}
+
+/** Give the docked till its width back, rather than letting it cover the page. */
+function DockedContent({ children }: { children: React.ReactNode }) {
+  const inset = useDockInset();
+  return (
+    <div className={`transition-[padding] duration-300 ease-out ${inset ? "lg:pr-[380px]" : ""}`}>
+      {children}
+    </div>
   );
 }

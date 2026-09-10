@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { PackagePlus, Plus, Search, X } from "lucide-react";
+import { Plus, Search, ShoppingCart, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   listProducts,
@@ -12,11 +12,12 @@ import {
   type ProductRow,
 } from "@/lib/inventory.functions";
 import { InventoryCard, stockStatusOf } from "@/components/inventory/InventoryCard";
+import { InventoryOverview } from "@/components/inventory/InventoryOverview";
+import { listAddons } from "@/lib/addons.functions";
 import { ProductDrawer } from "@/components/inventory/ProductDrawer";
 import { EmptyInventory, NoResults } from "@/components/inventory/EmptyState";
 import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { useOrg } from "@/hooks/use-org";
-import { useCart } from "@/components/cart/cart-context";
 import {
   Select,
   SelectContent,
@@ -46,11 +47,6 @@ const STATUS_FILTERS: { id: StockFilter; label: string }[] = [
   { id: "out_of_stock", label: "Out of Stock" },
 ];
 const PAGE = 8;
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
-});
 
 function InventoryPage() {
   const qc = useQueryClient();
@@ -68,6 +64,15 @@ function InventoryPage() {
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["products"],
     queryFn: () => list(),
+  });
+
+  // Add-ons are stock too — bought, shelved, and holding money — so the
+  // overview counts them. Shares the ["addons"] cache with the Add-ons page and
+  // the till, so this costs nothing on a warm app.
+  const listAddonsFn = useServerFn(listAddons);
+  const { data: addons = [] } = useQuery({
+    queryKey: ["addons"],
+    queryFn: () => listAddonsFn(),
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["products"], refetchType: "active" });
@@ -90,13 +95,6 @@ function InventoryPage() {
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
-
-  const cart = useCart();
-
-  const addToCart = (p: ProductRow) => {
-    if (p.stock <= 0) return;
-    cart.openEntry(p); // opens the entry drawer to collect full sale detail
-  };
 
   const [query, setQuery] = useState("");
   const [model, setModel] = useState<string>("all");
@@ -126,28 +124,20 @@ function InventoryPage() {
 
   const shown = filtered.slice(0, visible);
 
-  const kpis = useMemo(() => {
-    const total = products.length;
-    const low = products.filter((p) => stockStatusOf(p) === "low_stock").length;
-    const out = products.filter((p) => stockStatusOf(p) === "out_of_stock").length;
-    const value = products.reduce((s, p) => s + p.stock * Number(p.purchase_price), 0);
-    return { total, low, out, value };
-  }, [products]);
-
   const resetFilters = () => {
     setQuery("");
     setModel("all");
     setStatus("all");
   };
 
-  // Creating a product, editing one and receiving stock are all full pages now
-  // rather than side drawers — they are multi-field jobs, and stock-in spans
+  // Creating a product, editing one and buying stock in are all full pages now
+  // rather than side drawers — they are multi-field jobs, and a purchase spans
   // several products at once, which never fitted in a drawer bound to one.
   const handleAdd = () => navigate({ to: "/products/new" });
   const handleEdit = (p: ProductRow) =>
     navigate({ to: "/products/$productId/edit", params: { productId: p.id } });
-  const handleAddStock = (p?: ProductRow) =>
-    navigate({ to: "/stock/new", search: p ? { product: p.id } : {} });
+  const handleBuyMore = (p?: ProductRow) =>
+    navigate({ to: "/purchases/new", search: p ? { product: p.id } : {} });
 
   const isEmpty = !isLoading && products.length === 0;
   const noResults = !isEmpty && filtered.length === 0 && !isLoading;
@@ -156,16 +146,19 @@ function InventoryPage() {
     <>
       <PageHeader
         title="Inventory"
-        subtitle={`${products.length} product${products.length === 1 ? "" : "s"} in the catalogue`}
+        subtitle={`${products.length} product${products.length === 1 ? "" : "s"} · ${products.reduce(
+          (n, p) => n + p.stock,
+          0,
+        )} unit${products.reduce((n, p) => n + p.stock, 0) === 1 ? "" : "s"} on the shelf`}
         actions={
           canManage ? (
             <>
               <button
-                onClick={() => handleAddStock()}
+                onClick={() => handleBuyMore()}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-2 text-sm font-medium ring-1 ring-hairline transition hover:bg-accent active:scale-95"
               >
-                <PackagePlus className="size-4" />
-                <span className="hidden sm:inline">Add Stock</span>
+                <ShoppingCart className="size-4" />
+                <span className="hidden sm:inline">New Purchase</span>
               </button>
               <button
                 onClick={handleAdd}
@@ -226,12 +219,7 @@ function InventoryPage() {
       </PageHeader>
 
       <PageBody>
-        <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-          <Kpi label="Total Products" value={kpis.total.toString()} />
-          <Kpi label="Low Stock" value={kpis.low.toString()} tone="warning" />
-          <Kpi label="Out of Stock" value={kpis.out.toString()} tone="danger" />
-          <Kpi label="Inventory Value" value={fmt.format(kpis.value)} />
-        </section>
+        <InventoryOverview products={products} addons={addons} canSeeCost={canManage} />
 
         {isLoading ? (
           <GridSkeleton />
@@ -243,26 +231,26 @@ function InventoryPage() {
           <NoResults onReset={resetFilters} />
         ) : (
           <>
-            <div
-              key={`${status}-${model}`}
-              className="grid animate-in fade-in grid-cols-1 gap-4 duration-300 ease-out sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
-            >
-              {shown.map((p) => (
-                <InventoryCard
-                  key={p.id}
-                  product={p}
-                  canManage={canManage}
-                  relativeUpdated={relativeTime(p.updated_at)}
-                  onOpen={setOpenProduct}
-                  onAdjust={(id, delta) => adjustMut.mutate({ id, delta })}
-                  onTogglePin={(id, pinned) => pinMut.mutate({ id, pinned })}
-                  onAddToCart={addToCart}
-                  onEdit={handleEdit}
-                  onAddStock={handleAddStock}
-                  onDelete={(id) => setDeleteId(id)}
-                  reserved={cart.reservedQty(p.id)}
-                />
-              ))}
+            <div className="@container">
+              <div
+                key={`${status}-${model}`}
+                className="grid animate-in fade-in grid-cols-1 gap-4 duration-300 ease-out @xl:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 @6xl:grid-cols-5 sm:gap-5"
+              >
+                {shown.map((p) => (
+                  <InventoryCard
+                    key={p.id}
+                    product={p}
+                    canManage={canManage}
+                    relativeUpdated={relativeTime(p.updated_at)}
+                    onOpen={setOpenProduct}
+                    onAdjust={(id, delta) => adjustMut.mutate({ id, delta })}
+                    onTogglePin={(id, pinned) => pinMut.mutate({ id, pinned })}
+                    onEdit={handleEdit}
+                    onBuyMore={handleBuyMore}
+                    onDelete={(id) => setDeleteId(id)}
+                  />
+                ))}
+              </div>
             </div>
 
             {visible < filtered.length && (
@@ -279,13 +267,12 @@ function InventoryPage() {
         )}
       </PageBody>
 
-      {/* Read-only detail view — employees open this to add to cart. */}
+      {/* Read-only detail view. Selling happens at the till, on Sales. */}
       <ProductDrawer
         product={openProduct}
         open={!!openProduct}
         onOpenChange={(v) => !v && setOpenProduct(null)}
-        onAddToCart={addToCart}
-        onAddStock={canManage ? handleAddStock : undefined}
+        onBuyMore={canManage ? handleBuyMore : undefined}
       />
 
       {/* Deleting a product is admin-only, so for an employee this dialog is
@@ -345,48 +332,21 @@ function Chip({
   );
 }
 
-function Kpi({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "warning" | "danger";
-}) {
-  const valueTone =
-    tone === "warning"
-      ? "text-warning-foreground"
-      : tone === "danger"
-        ? "text-danger-foreground"
-        : "text-foreground";
-  return (
-    <div className="flex flex-col gap-1 rounded-2xl bg-surface p-4 ring-1 ring-hairline sm:p-5">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <span
-        className={`text-xl font-semibold tracking-tight sm:text-2xl tabular-nums ${valueTone}`}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
 function GridSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div
-          key={i}
-          className="flex flex-col gap-4 rounded-3xl bg-surface p-4 ring-1 ring-hairline"
-        >
-          <div className="aspect-square w-full animate-pulse rounded-xl bg-surface-muted" />
-          <div className="h-4 w-3/4 animate-pulse rounded bg-surface-muted" />
-          <div className="h-3 w-1/2 animate-pulse rounded bg-surface-muted" />
-        </div>
-      ))}
+    <div className="@container">
+      <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex flex-col gap-4 rounded-3xl bg-surface p-4 ring-1 ring-hairline"
+          >
+            <div className="aspect-square w-full animate-pulse rounded-xl bg-surface-muted" />
+            <div className="h-4 w-3/4 animate-pulse rounded bg-surface-muted" />
+            <div className="h-3 w-1/2 animate-pulse rounded bg-surface-muted" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

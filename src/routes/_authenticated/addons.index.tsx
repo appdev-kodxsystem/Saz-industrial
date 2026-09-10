@@ -4,12 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { Gift, PackagePlus, Pencil, Plus, Search, Trash2, X } from "lucide-react";
-import {
-  listAddons,
-  deleteAddon as deleteAddonFn,
-  setAddonActive as setAddonActiveFn,
-  type AddonRow,
-} from "@/lib/addons.functions";
+import { listAddons, deleteAddon as deleteAddonFn, type AddonRow } from "@/lib/addons.functions";
 import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { AddonStockDrawer } from "@/components/addons/AddonStockDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -56,7 +51,6 @@ function AddonsPage() {
 
   const list = useServerFn(listAddons);
   const remove = useServerFn(deleteAddonFn);
-  const setActive = useServerFn(setAddonActiveFn);
 
   const {
     data: addons = [],
@@ -77,12 +71,6 @@ function AddonsPage() {
       toast.success("Add-on deleted");
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
-  });
-
-  const activeMut = useMutation({
-    mutationFn: (v: { id: string; active: boolean }) => setActive({ data: v }),
-    onSuccess: invalidate,
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed"),
   });
 
   const [query, setQuery] = useState("");
@@ -111,12 +99,11 @@ function AddonsPage() {
   }, [addons, query, category, status]);
 
   const kpis = useMemo(() => {
-    const live = addons.filter((a) => a.active);
     return {
       total: addons.length,
       onHand: addons.reduce((n, a) => n + a.on_hand, 0),
       value: addons.reduce((n, a) => n + a.on_hand_value, 0),
-      low: live.filter((a) => addonStockStatus(a) !== "in_stock").length,
+      low: addons.filter((a) => addonStockStatus(a) !== "in_stock").length,
     };
   }, [addons]);
 
@@ -129,11 +116,11 @@ function AddonsPage() {
           canManage ? (
             <>
               <button
-                onClick={() => navigate({ to: "/stock/new" })}
+                onClick={() => navigate({ to: "/purchases/new" })}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-2 text-sm font-medium ring-1 ring-hairline transition hover:bg-accent active:scale-95"
               >
                 <PackagePlus className="size-4" />
-                <span className="hidden sm:inline">Add Stock</span>
+                <span className="hidden sm:inline">New Purchase</span>
               </button>
               <button
                 onClick={() => navigate({ to: "/addons/new" })}
@@ -250,7 +237,6 @@ function AddonsPage() {
                 onEdit={() => navigate({ to: "/addons/$addonId/edit", params: { addonId: a.id } })}
                 onStock={() => setStockFor(a)}
                 onDelete={() => setDeleteId(a.id)}
-                onToggleActive={() => activeMut.mutate({ id: a.id, active: !a.active })}
               />
             ))}
           </div>
@@ -305,14 +291,12 @@ function AddonRowCard({
   onEdit,
   onStock,
   onDelete,
-  onToggleActive,
 }: {
   addon: AddonRow;
   canManage: boolean;
   onEdit: () => void;
   onStock: () => void;
   onDelete: () => void;
-  onToggleActive: () => void;
 }) {
   const status = addonStockStatus(a);
   const tone =
@@ -323,11 +307,7 @@ function AddonRowCard({
         : "bg-success text-success-foreground";
 
   return (
-    <div
-      className={`group flex flex-col gap-3 rounded-2xl bg-surface p-4 ring-1 ring-hairline transition hover:shadow-md sm:flex-row sm:items-center ${
-        a.active ? "" : "opacity-60"
-      }`}
-    >
+    <div className="group flex flex-col gap-3 rounded-2xl bg-surface p-4 ring-1 ring-hairline transition hover:shadow-md sm:flex-row sm:items-center">
       <button
         onClick={onStock}
         className="flex min-w-0 flex-1 items-center gap-3 text-left"
@@ -336,7 +316,7 @@ function AddonRowCard({
         <div className="size-12 shrink-0 overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline">
           {a.image_url ? (
             <img
-              src={supabaseThumb(a.image_url, 96)}
+              src={supabaseThumb(a.image_url, 96) ?? undefined}
               alt={a.name}
               className="h-full w-full object-cover"
             />
@@ -347,14 +327,7 @@ function AddonRowCard({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold">{a.name}</span>
-            {!a.active && (
-              <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                Retired
-              </span>
-            )}
-          </div>
+          <span className="block truncate text-sm font-semibold">{a.name}</span>
           <div className="truncate text-xs text-muted-foreground">
             <span className="font-mono">{a.code}</span> · {a.category}
           </div>
@@ -375,12 +348,6 @@ function AddonRowCard({
             <IconButton label={`Edit ${a.name}`} onClick={onEdit}>
               <Pencil className="size-4" />
             </IconButton>
-            <button
-              onClick={onToggleActive}
-              className="rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-secondary hover:text-foreground"
-            >
-              {a.active ? "Retire" : "Restore"}
-            </button>
             <IconButton label={`Delete ${a.name}`} onClick={onDelete} danger>
               <Trash2 className="size-4" />
             </IconButton>

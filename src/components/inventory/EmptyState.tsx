@@ -42,9 +42,14 @@ export function NoResults({ onReset }: { onReset: () => void }) {
       </div>
       <div className="flex max-w-sm flex-col gap-1">
         <h2 className="text-base font-semibold">No matching products found</h2>
-        <p className="text-sm text-muted-foreground">Try a different search or clear your filters.</p>
+        <p className="text-sm text-muted-foreground">
+          Try a different search or clear your filters.
+        </p>
       </div>
-      <button onClick={onReset} className="rounded-lg bg-secondary px-3 py-2 text-xs font-medium hover:bg-accent">
+      <button
+        onClick={onReset}
+        className="rounded-lg bg-secondary px-3 py-2 text-xs font-medium hover:bg-accent"
+      >
         Reset filters
       </button>
     </div>

@@ -60,7 +60,7 @@ export function AddonStockDrawer({
           <div className="size-14 shrink-0 overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline">
             {addon.image_url ? (
               <img
-                src={supabaseThumb(addon.image_url, 112)}
+                src={supabaseThumb(addon.image_url, 112) ?? undefined}
                 alt={addon.name}
                 className="h-full w-full object-cover"
               />
@@ -95,14 +95,14 @@ export function AddonStockDrawer({
               ) : batches.length === 0 ? (
                 <div className="flex flex-col items-start gap-3 rounded-2xl bg-surface-muted p-4">
                   <p className="text-sm text-muted-foreground">
-                    No stock received yet. Add-ons arrive on a stock order, alongside machinery and
+                    No stock received yet. Add-ons arrive on a purchase, alongside machinery and
                     under the same receipt.
                   </p>
                   <button
-                    onClick={() => navigate({ to: "/stock/new" })}
+                    onClick={() => navigate({ to: "/purchases/new" })}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground"
                   >
-                    <PackagePlus className="size-3.5" /> Receive stock
+                    <PackagePlus className="size-3.5" /> Buy some in
                   </button>
                 </div>
               ) : (

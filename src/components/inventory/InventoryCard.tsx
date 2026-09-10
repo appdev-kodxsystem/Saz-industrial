@@ -1,13 +1,4 @@
-import {
-  Plus,
-  MoreHorizontal,
-  Pin,
-  ShoppingCart,
-  Eye,
-  Pencil,
-  Trash2,
-  Package,
-} from "lucide-react";
+import { Plus, MoreHorizontal, Pin, Eye, Pencil, Trash2, Package } from "lucide-react";
 import { StockBadge } from "./StockBadge";
 import { type ProductRow } from "@/lib/inventory.functions";
 import { supabaseThumb } from "@/lib/img";
@@ -30,14 +21,12 @@ interface Props {
   onOpen: (p: ProductRow) => void;
   onAdjust: (id: string, delta: number) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
-  onAddToCart: (p: ProductRow) => void;
   onEdit: (p: ProductRow) => void;
-  onAddStock: (p: ProductRow) => void;
+  onBuyMore: (p: ProductRow) => void;
   onDelete: (id: string) => void;
   relativeUpdated: string;
-  reserved?: number; // units of this product currently held in carts
-  /** Admin. Gates pin + the edit/add-stock/delete menu. Employees keep the
-   *  read and sell affordances (view details, add to cart). */
+  /** Admin. Gates pin + the edit/buy-more/delete menu. Employees keep the read
+   *  affordance (view details); selling happens on the Sales page. */
   canManage?: boolean;
 }
 
@@ -46,17 +35,13 @@ export function InventoryCard({
   onOpen,
   onAdjust,
   onTogglePin,
-  onAddToCart,
   onEdit,
-  onAddStock,
+  onBuyMore,
   onDelete,
   relativeUpdated,
-  reserved = 0,
   canManage = false,
 }: Props) {
   const status = stockStatusOf(product);
-  const inCart = Math.min(reserved, product.stock);
-  const freeToAdd = Math.max(0, product.stock - inCart);
   const stockTone =
     status === "out_of_stock"
       ? "text-danger-foreground"
@@ -82,7 +67,7 @@ export function InventoryCard({
         <div className="aspect-square w-full">
           {product.image_url ? (
             <img
-              src={supabaseThumb(product.image_url, 400)}
+              src={supabaseThumb(product.image_url, 400) ?? undefined}
               alt={product.name}
               loading="lazy"
               decoding="async"
@@ -136,8 +121,15 @@ export function InventoryCard({
             {product.sku}
           </span>
         </div>
+        {/* `category` is a category, not a model — products have no model field
+            at all. It also defaults to the literal "Uncategorized" when the form
+            is left blank, which is not worth a line of the card, so an
+            uncategorized product just shows when it was last touched. */}
         <p className="line-clamp-1 text-xs text-muted-foreground">
-          Model {product.category} • Updated {relativeUpdated}
+          {product.category && product.category !== "Uncategorized" && (
+            <span className="text-foreground/70">{product.category} · </span>
+          )}
+          Updated {relativeUpdated}
         </p>
       </div>
 
@@ -150,32 +142,19 @@ export function InventoryCard({
             <span className={`text-sm font-semibold tabular-nums ${stockTone}`}>
               {product.stock}
             </span>
-            {inCart > 0 && (
-              <span className="text-[10px] font-medium text-muted-foreground">
-                ({inCart} in cart)
-              </span>
-            )}
           </div>
         </div>
 
         <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => onAddToCart(product)}
-            disabled={freeToAdd <= 0}
-            title={freeToAdd <= 0 && product.stock > 0 ? "All units are in a cart" : undefined}
-            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <ShoppingCart className="size-3.5" />
-            Add to Cart
-          </button>
+          {/* Inventory is the catalogue, not the till — selling happens on the
+              Sales page, which has the whole ticket beside it. */}
           <button
             type="button"
             onClick={() => onOpen(product)}
-            aria-label="View details"
-            className="grid size-9 place-items-center rounded-lg bg-secondary text-secondary-foreground hover:bg-accent"
+            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-secondary px-3 py-2 text-xs font-medium ring-1 ring-hairline transition hover:bg-accent active:scale-[0.98]"
           >
-            <Eye className="size-4" />
+            <Eye className="size-3.5" />
+            Details
           </button>
           {/* Edit / Add Stock / Delete are the three product-and-stock writes.
             The whole menu goes away for an employee — there is nothing left in
@@ -192,8 +171,8 @@ export function InventoryCard({
                 <DropdownMenuItem onClick={() => onEdit(product)}>
                   <Pencil className="size-4" /> Edit Product
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onAddStock(product)}>
-                  <Plus className="size-4" /> Add Stock
+                <DropdownMenuItem onClick={() => onBuyMore(product)}>
+                  <Plus className="size-4" /> Buy More
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

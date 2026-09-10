@@ -20,7 +20,11 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { getLedger, type LedgerEntry } from "@/lib/inventory.functions";
 
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR", maximumFractionDigits: 2 });
+const money = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "PKR",
+  maximumFractionDigits: 2,
+});
 
 function startOfDay(d: Date) {
   const x = new Date(d);
@@ -33,7 +37,11 @@ function endOfDay(d: Date) {
   return x.getTime();
 }
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 function fmtRange(d: Date) {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -80,7 +88,9 @@ async function downloadPdf(entries: LedgerEntry[], from: Date, to: Date) {
     const t = new Date(e.date).getTime();
     return !isNaN(t) && t >= fromMs && t <= toMs;
   });
-  const sales = inRange.filter((e) => e.kind === "sale").sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  const sales = inRange
+    .filter((e) => e.kind === "sale")
+    .sort((a, b) => +new Date(a.date) - +new Date(b.date));
   const purchases = inRange
     .filter((e) => e.kind === "purchase")
     .sort((a, b) => +new Date(a.date) - +new Date(b.date));
@@ -237,9 +247,14 @@ async function downloadPdf(entries: LedgerEntry[], from: Date, to: Date) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(...MUTED);
-    doc.text(`SAZ Industrial · Page ${i} of ${pages}`, pageW / 2, doc.internal.pageSize.getHeight() - 20, {
-      align: "center",
-    });
+    doc.text(
+      `SAZ Industrial · Page ${i} of ${pages}`,
+      pageW / 2,
+      doc.internal.pageSize.getHeight() - 20,
+      {
+        align: "center",
+      },
+    );
   }
 
   const fname = `vault-report_${fmtRange(from)}_to_${fmtRange(to)}`.replace(/[^\w-]+/g, "-");
@@ -316,7 +331,11 @@ export function PrintReportDialog() {
             disabled={!canExport || isLoading}
             className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
           >
-            {isLoading ? <Loader2 className="size-4 animate-spin" /> : <FileDown className="size-4" />}
+            {isLoading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <FileDown className="size-4" />
+            )}
             Download PDF
           </button>
         </DialogFooter>
