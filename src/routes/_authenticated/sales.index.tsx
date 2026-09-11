@@ -1,12 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Gift, Receipt, ScrollText, ShoppingCart, X } from "lucide-react";
 import { listSalesPage, type SaleOrderRow } from "@/lib/inventory.functions";
 import { PageHeader, PageBody } from "@/components/inventory/AppShell";
 import { SearchBox, Pagination } from "@/components/inventory/TableControls";
-import { DateFilter, useDateFilter } from "@/components/inventory/DateFilter";
+import { DateFilter, presetRange, useDateFilter } from "@/components/inventory/DateFilter";
 import {
   DateCell,
   Kpi,
@@ -69,7 +69,14 @@ function SalesPage() {
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
         <div className="min-w-0">
           <PageBody className="lg:pr-0">
-            {tab === "sell" ? <ItemPicker /> : <SalesRecords />}
+            {tab === "sell" ? (
+              <>
+                <TillStrip canSeeCost={isAdmin} />
+                <ItemPicker />
+              </>
+            ) : (
+              <SalesRecords />
+            )}
           </PageBody>
         </div>
 
@@ -126,6 +133,70 @@ function SalesPage() {
   );
 }
 
+/**
+ * What this till has taken today.
+ *
+ * The first thing anyone asks at a counter — the owner walking past, the person
+ * closing up — is "how have we done today", and the answer used to require
+ * switching to Records and setting a filter. It sits above the items instead,
+ * updating itself while the page is open.
+ */
+function TillStrip({ canSeeCost }: { canSeeCost: boolean }) {
+  const fetchPage = useServerFn(listSalesPage);
+  const today = useMemo(() => presetRange("day"), []);
+  const { data } = useQuery({
+    queryKey: ["sales", "today", today.from, today.to],
+    queryFn: () =>
+      fetchPage({ data: { page: 1, pageSize: 1, search: "", from: today.from, to: today.to } }),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    placeholderData: keepPreviousData,
+  });
+  const s = data?.stats ?? { count: 0, units: 0, revenue: 0, profit: 0, outstanding: 0 };
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl bg-surface px-4 py-3 ring-1 ring-hairline">
+      <span className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <Receipt className="size-3.5" />
+        Today
+      </span>
+      <TillFigure label="Taken" value={money(s.revenue)} strong />
+      <TillFigure label="Sales" value={`${s.count} · ${s.units} unit${s.units === 1 ? "" : "s"}`} />
+      {canSeeCost && <TillFigure label="Profit" value={money(s.profit)} />}
+      {s.outstanding > 0 && (
+        <TillFigure label="Unpaid" value={money(s.outstanding)} tone="warning" />
+      )}
+    </div>
+  );
+}
+
+function TillFigure({
+  label,
+  value,
+  strong,
+  tone,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  tone?: "warning";
+}) {
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={`tabular-nums ${strong ? "text-lg font-semibold" : "text-sm font-medium"} ${
+          tone === "warning" ? "text-warning-foreground" : ""
+        }`}
+      >
+        {value}
+      </span>
+    </span>
+  );
+}
+
 const PAGE_SIZE = 10;
 
 /** The ledger half: one row per sale, click through for everything on it. */
@@ -162,20 +233,33 @@ function SalesRecords() {
 
   return (
     <div>
-      <div className="mb-4">
+      {/* Both controls answer "which rows", so they share one line instead of
+          bracketing the figures from above and below. */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <DateFilter period={period} range={range} onChange={onChange} />
+        <SearchBox
+          value={searchInput}
+          onChange={setSearchInput}
+          placeholder="Search customer or product…"
+        />
       </div>
 
-      {/* Two across, not four: this half of the screen is half as wide. */}
-      <section className="mb-6 grid grid-cols-2 gap-3">
+      <KpiRow>
         <Kpi label="Sales" value={String(stats.count)} />
         <Kpi label="Revenue" value={money(stats.revenue)} />
         {isAdmin && (
           <>
-            <Kpi label="Profit" value={money(stats.profit)} tone="good" />
+            {/* Coloured by its sign. A loss rendered in green is the one thing
+                this figure must never do. */}
+            <Kpi
+              label="Profit"
+              value={money(stats.profit)}
+              tone={stats.profit >= 0 ? "good" : "danger"}
+            />
             <Kpi
               label="Margin"
               value={`${stats.revenue > 0 ? ((stats.profit / stats.revenue) * 100).toFixed(1) : "0.0"}%`}
+              tone={stats.profit >= 0 ? undefined : "danger"}
             />
           </>
         )}
@@ -185,15 +269,7 @@ function SalesRecords() {
             <Kpi label="Outstanding" value={money(stats.outstanding)} tone="warning" />
           </>
         )}
-      </section>
-
-      <div className="mb-4 flex justify-end">
-        <SearchBox
-          value={searchInput}
-          onChange={setSearchInput}
-          placeholder="Search customer or product…"
-        />
-      </div>
+      </KpiRow>
 
       <div className="animate-in fade-in duration-300 ease-out">
         <TransactionTable
@@ -227,7 +303,7 @@ function columnsFor(canSeeCost: boolean): TxColumn<SaleOrderRow>[] {
     {
       header: "Customer / Items",
       render: (r) => (
-        <div className="flex min-w-0 flex-col">
+        <div className="flex min-w-0 max-w-[18rem] flex-col">
           <span className="truncate font-medium">{r.customer_name || "Walk-in"}</span>
           <span className="truncate text-xs text-muted-foreground">{r.item_summary}</span>
         </div>

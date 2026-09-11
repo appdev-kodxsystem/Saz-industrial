@@ -93,6 +93,14 @@
   --input: oklch(0.18 0.01 260 / 0.1);
   --ring: oklch(0.18 0.01 260 / 0.25);
 
+  /* Report series. Three categorical slots, validated as a set against this
+     surface for colour-vision separation and contrast — not picked by eye.
+     Revenue / Cost / Profit, in that fixed order; never reassigned by rank. */
+  --series-revenue: #2a78d6;
+  --series-cost: #eb6834;
+  --series-profit: #1baf7a;
+  --series-loss: #e34948;
+
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -109,6 +117,12 @@
 }
 
 .dark {
+  /* The same three hues re-stepped for the dark surface, validated there too. */
+  --series-revenue: #3987e5;
+  --series-cost: #d95926;
+  --series-profit: #199e70;
+  --series-loss: #e66767;
+
   --background: oklch(0.16 0.01 260);
   --foreground: oklch(0.985 0 0);
   --surface: oklch(0.21 0.01 260);

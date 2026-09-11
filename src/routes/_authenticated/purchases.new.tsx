@@ -27,6 +27,7 @@ import { useOrg } from "@/hooks/use-org";
 import { createPurchase, listProducts, type ProductRow } from "@/lib/inventory.functions";
 import { listAddons, type AddonRow } from "@/lib/addons.functions";
 import { AddonBadge } from "@/components/inventory/AddonBadge";
+import { money } from "@/lib/money";
 
 export const Route = createFileRoute("/_authenticated/purchases/new")({
   head: () => ({ meta: [{ title: "New Purchase — SAZ Industrial" }] }),
@@ -37,12 +38,6 @@ export const Route = createFileRoute("/_authenticated/purchases/new")({
   },
   validateSearch: z.object({ product: z.string().optional(), addon: z.string().optional() }),
   component: NewPurchasePage,
-});
-
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
 });
 
 interface Line {
@@ -470,13 +465,20 @@ function NewPurchasePage() {
         },
       });
 
-      for (const key of [["products"], ["addons"], ["purchase"], ["ledger"], ["profit-series"]]) {
+      for (const key of [
+        ["products"],
+        ["stock-units"],
+        ["addons"],
+        ["purchase"],
+        ["ledger"],
+        ["profit-series"],
+      ]) {
         qc.invalidateQueries({ queryKey: key, refetchType: "active" });
       }
       const parts: string[] = [];
-      if (res.unitCount) parts.push(`${res.unitCount} unit(s) — ${fmt.format(res.totalCost)}`);
+      if (res.unitCount) parts.push(`${res.unitCount} unit(s) — ${money(res.totalCost)}`);
       if (res.addonUnitCount)
-        parts.push(`${res.addonUnitCount} add-on(s) — ${fmt.format(res.addonCost)}`);
+        parts.push(`${res.addonUnitCount} add-on(s) — ${money(res.addonCost)}`);
       toast.success(`Purchase recorded: ${parts.join(" · ")}`);
       navigate({ to: "/purchases" });
     } catch (err) {
@@ -725,8 +727,7 @@ function NewPurchasePage() {
                   <>
                     {lines.length > 0 && (
                       <SectionLabel icon={<Package className="size-3.5" />} label="Machinery">
-                        {totals.units} unit{totals.units === 1 ? "" : "s"} ·{" "}
-                        {fmt.format(totals.cost)}
+                        {totals.units} unit{totals.units === 1 ? "" : "s"} · {money(totals.cost)}
                       </SectionLabel>
                     )}
                     <div className="space-y-3">
@@ -753,10 +754,10 @@ function NewPurchasePage() {
                                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                                   <span>{p.stock} in stock</span>
                                   {Number(p.purchase_price) > 0 && (
-                                    <span>· last {fmt.format(Number(p.purchase_price))}</span>
+                                    <span>· last {money(Number(p.purchase_price))}</span>
                                   )}
                                   {Number(p.selling_price) > 0 && (
-                                    <span>· sells {fmt.format(Number(p.selling_price))}</span>
+                                    <span>· sells {money(Number(p.selling_price))}</span>
                                   )}
                                 </div>
                               </div>
@@ -896,9 +897,7 @@ function NewPurchasePage() {
                                 <Sparkles className="size-3" />
                                 IDs {p.sku.toUpperCase().replace(/[^A-Z0-9]+/g, "-")}-…
                               </span>
-                              <span className="font-semibold tabular-nums">
-                                {fmt.format(total)}
-                              </span>
+                              <span className="font-semibold tabular-nums">{money(total)}</span>
                             </div>
                           </div>
                         );
@@ -909,7 +908,7 @@ function NewPurchasePage() {
                       <>
                         <SectionLabel icon={<Gift className="size-3.5" />} label="Add-ons">
                           {addonTotals.units} unit{addonTotals.units === 1 ? "" : "s"} ·{" "}
-                          {fmt.format(addonTotals.cost)}
+                          {money(addonTotals.cost)}
                         </SectionLabel>
                         <div className="space-y-3">
                           {addonLines.map((line) => {
@@ -1090,7 +1089,7 @@ function NewPurchasePage() {
                                     })()}
                                   </span>
                                   <span className="font-semibold tabular-nums">
-                                    {fmt.format(addonLineTotal(line))}
+                                    {money(addonLineTotal(line))}
                                   </span>
                                 </div>
                               </div>
@@ -1151,11 +1150,11 @@ function NewPurchasePage() {
                     <>
                       <SubTotal
                         label={`Machinery · ${totals.units} unit${totals.units === 1 ? "" : "s"}`}
-                        value={fmt.format(totals.cost)}
+                        value={money(totals.cost)}
                       />
                       <SubTotal
                         label={`Add-ons · ${addonTotals.units} unit${addonTotals.units === 1 ? "" : "s"}`}
-                        value={fmt.format(addonTotals.cost)}
+                        value={money(addonTotals.cost)}
                       />
                     </>
                   )}
@@ -1164,7 +1163,7 @@ function NewPurchasePage() {
                       Purchase total
                     </span>
                     <span className="text-lg font-bold tabular-nums">
-                      {fmt.format(totals.cost + addonTotals.cost)}
+                      {money(totals.cost + addonTotals.cost)}
                     </span>
                   </div>
                 </div>

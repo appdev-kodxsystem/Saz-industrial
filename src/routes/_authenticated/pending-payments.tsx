@@ -15,6 +15,7 @@ import { DateFilter, useDateFilter } from "@/components/inventory/DateFilter";
 import {
   DateCell,
   Kpi,
+  KpiRow,
   TransactionTable,
   money,
   type TxColumn,
@@ -136,11 +137,11 @@ function PendingPaymentsPage() {
       </PageHeader>
 
       <PageBody>
-        <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
+        <KpiRow>
           <Kpi label="Pending Sales" value={String(total)} />
           <Kpi label="Outstanding" value={money(data?.outstanding ?? 0)} tone="danger" />
           <Kpi label="Received" value={money(data?.received ?? 0)} tone="good" />
-        </section>
+        </KpiRow>
 
         <div className="mb-4 flex justify-end">
           <SearchBox

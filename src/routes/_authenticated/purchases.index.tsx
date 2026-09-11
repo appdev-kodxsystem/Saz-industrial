@@ -16,7 +16,6 @@ import {
   type TxColumn,
 } from "@/components/inventory/TransactionTable";
 import { ReceiptLink } from "@/components/inventory/ReceiptLink";
-import { AddonBadge } from "@/components/inventory/AddonBadge";
 
 export const Route = createFileRoute("/_authenticated/purchases/")({
   head: () => ({ meta: [{ title: "Purchases — SAZ Industrial" }] }),
@@ -150,11 +149,8 @@ const COLUMNS: TxColumn<PurchaseOrderRow>[] = [
   {
     header: "Supplier / Items",
     render: (r) => (
-      <div className="flex min-w-0 flex-col">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate font-medium">{r.supplier || "Unnamed supplier"}</span>
-          {r.addon_unit_count > 0 && <AddonBadge />}
-        </span>
+      <div className="flex min-w-0 max-w-[18rem] flex-col">
+        <span className="truncate font-medium">{r.supplier || "Unnamed supplier"}</span>
         <span className="truncate text-xs text-muted-foreground">{r.item_summary}</span>
       </div>
     ),
@@ -180,11 +176,6 @@ const COLUMNS: TxColumn<PurchaseOrderRow>[] = [
     ),
   },
   {
-    header: "Lines",
-    align: "right",
-    render: (r) => <span className="text-muted-foreground">{r.line_count}</span>,
-  },
-  {
     header: "Total",
     align: "right",
     render: (r) => (
@@ -201,13 +192,4 @@ const COLUMNS: TxColumn<PurchaseOrderRow>[] = [
     ),
   },
   { header: "Receipt", render: (r) => <ReceiptLink path={r.receipt_path} /> },
-  {
-    header: "In Stock",
-    align: "right",
-    render: (r) => (
-      <span className={r.still_in_stock > 0 ? "text-success-foreground" : "text-muted-foreground"}>
-        {r.still_in_stock} / {r.total_units}
-      </span>
-    ),
-  },
 ];

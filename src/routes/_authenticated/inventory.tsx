@@ -39,13 +39,13 @@ export const Route = createFileRoute("/_authenticated/inventory")({
   component: InventoryPage,
 });
 
-type StockFilter = "all" | "in_stock" | "low_stock" | "out_of_stock";
 const STATUS_FILTERS: { id: StockFilter; label: string }[] = [
   { id: "all", label: "All status" },
   { id: "in_stock", label: "In Stock" },
   { id: "low_stock", label: "Low Stock" },
   { id: "out_of_stock", label: "Out of Stock" },
 ];
+type StockFilter = "all" | "in_stock" | "low_stock" | "out_of_stock";
 const PAGE = 8;
 
 function InventoryPage() {
@@ -75,7 +75,13 @@ function InventoryPage() {
     queryFn: () => listAddonsFn(),
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["products"], refetchType: "active" });
+  // Adjusting or deleting stock changes which units exist, so the till's
+  // per-product unit lists expire with the product list — not doing this is
+  // how a sold or removed unit ends up offered for sale again.
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["products"], refetchType: "active" });
+    qc.invalidateQueries({ queryKey: ["stock-units"] });
+  };
 
   const adjustMut = useMutation({
     mutationFn: (v: { id: string; delta: number }) => adjust({ data: v }),
@@ -234,7 +240,7 @@ function InventoryPage() {
             <div className="@container">
               <div
                 key={`${status}-${model}`}
-                className="grid animate-in fade-in grid-cols-1 gap-4 duration-300 ease-out @xl:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 @6xl:grid-cols-5 sm:gap-5"
+                className="grid animate-in fade-in grid-cols-1 gap-4 duration-300 ease-out sm:grid-cols-[repeat(auto-fill,minmax(240px,280px))] sm:gap-5"
               >
                 {shown.map((p) => (
                   <InventoryCard
@@ -246,7 +252,6 @@ function InventoryPage() {
                     onAdjust={(id, delta) => adjustMut.mutate({ id, delta })}
                     onTogglePin={(id, pinned) => pinMut.mutate({ id, pinned })}
                     onEdit={handleEdit}
-                    onBuyMore={handleBuyMore}
                     onDelete={(id) => setDeleteId(id)}
                   />
                 ))}
@@ -335,7 +340,7 @@ function Chip({
 function GridSkeleton() {
   return (
     <div className="@container">
-      <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,280px))]">
         {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}

@@ -1,5 +1,4 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { listProducts } from "@/lib/inventory.functions";
@@ -24,10 +23,6 @@ function EditProductPage() {
   });
 
   const product = products.find((p) => p.id === productId) ?? null;
-  const categories = useMemo(
-    () => Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort(),
-    [products],
-  );
 
   if (isLoading) {
     return (
@@ -61,5 +56,5 @@ function EditProductPage() {
 
   // Keyed so switching between products remounts the form with fresh state
   // instead of showing the previous product's edits.
-  return <ProductForm key={product.id} initial={product} categories={categories} />;
+  return <ProductForm key={product.id} initial={product} />;
 }

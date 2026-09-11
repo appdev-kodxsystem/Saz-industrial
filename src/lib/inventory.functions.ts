@@ -710,6 +710,9 @@ export interface ProfitSaleRow {
   selling_price: number;
   cost: number;
   profit: number;
+  /** Snapshot taken at the time of sale, so a renamed or deleted product still
+   *  reports under the name it was sold as. */
+  product_name: string;
 }
 
 export interface LedgerEntry {
@@ -891,7 +894,7 @@ export const getProfitSeries = createServerFn({ method: "GET" })
     const { fromIso, toIso } = rangeIso(data.from, data.to);
     let sq = context.supabase
       .from("sales")
-      .select("id, selling_price, created_at, stock_item_id")
+      .select("id, selling_price, created_at, stock_item_id, product_name")
       .eq("org_id", context.orgId);
     if (fromIso) sq = sq.gte("created_at", fromIso);
     if (toIso) sq = sq.lte("created_at", toIso);
@@ -909,6 +912,7 @@ export const getProfitSeries = createServerFn({ method: "GET" })
       selling_price: number;
       created_at: string;
       stock_item_id: string | null;
+      product_name: string | null;
     }[] = [];
     if (salesRes.error) {
       if (String(salesRes.error.message).includes("Could not find the table 'public.sales'"))
@@ -934,6 +938,7 @@ export const getProfitSeries = createServerFn({ method: "GET" })
         selling_price: selling,
         cost: cost + addon,
         profit: selling - cost - addon,
+        product_name: s.product_name ?? "Unnamed product",
       };
     });
   });

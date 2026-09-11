@@ -19,12 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Calendar } from "@/components/ui/calendar";
 import { getLedger, type LedgerEntry } from "@/lib/inventory.functions";
-
-const money = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 2,
-});
+import { moneyExact } from "@/lib/money";
 
 function startOfDay(d: Date) {
   const x = new Date(d);
@@ -140,12 +135,12 @@ async function downloadPdf(entries: LedgerEntry[], from: Date, to: Date) {
 
   // --- KPI cards (two rows of four) ---
   const cards: { label: string; value: string }[] = [
-    { label: "Revenue", value: money.format(revenue) },
-    { label: "Profit", value: money.format(profit) },
+    { label: "Revenue", value: moneyExact(revenue) },
+    { label: "Profit", value: moneyExact(profit) },
     { label: "Margin", value: `${margin.toFixed(1)}%` },
-    { label: "Purchase Spend", value: money.format(spend) },
+    { label: "Purchase Spend", value: moneyExact(spend) },
     { label: "Units Sold", value: String(sales.length) },
-    { label: "Cost of Goods Sold", value: money.format(cogs) },
+    { label: "Cost of Goods Sold", value: moneyExact(cogs) },
     { label: "Units Purchased", value: String(purchases.length) },
     { label: "Still In Stock", value: String(inStock) },
   ];
@@ -195,13 +190,13 @@ async function downloadPdf(entries: LedgerEntry[], from: Date, to: Date) {
           fmtDate(e.date),
           e.product_name,
           e.sku,
-          money.format(e.amount),
-          money.format(e.cost),
-          money.format(e.profit),
+          moneyExact(e.amount),
+          moneyExact(e.cost),
+          moneyExact(e.profit),
         ])
       : [["—", "No sales in this period", "", "", "", ""]],
     foot: sales.length
-      ? [["", "Totals", "", money.format(revenue), money.format(cogs), money.format(profit)]]
+      ? [["", "Totals", "", moneyExact(revenue), moneyExact(cogs), moneyExact(profit)]]
       : undefined,
     styles: { fontSize: 8.5, cellPadding: 4 },
     headStyles: { fillColor: INK, textColor: 255, fontSize: 8 },
@@ -229,11 +224,11 @@ async function downloadPdf(entries: LedgerEntry[], from: Date, to: Date) {
           e.product_name,
           e.sku,
           e.reference,
-          money.format(e.amount),
+          moneyExact(e.amount),
           e.sold ? "Sold" : "In stock",
         ])
       : [["—", "No purchases in this period", "", "", "", ""]],
-    foot: purchases.length ? [["", "Total Spend", "", "", money.format(spend), ""]] : undefined,
+    foot: purchases.length ? [["", "Total Spend", "", "", moneyExact(spend), ""]] : undefined,
     styles: { fontSize: 8.5, cellPadding: 4 },
     headStyles: { fillColor: INK, textColor: 255, fontSize: 8 },
     footStyles: { fillColor: [245, 245, 245], textColor: INK, fontStyle: "bold" },

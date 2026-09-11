@@ -1,4 +1,4 @@
-import { Plus, MoreHorizontal, Pin, Eye, Pencil, Trash2, Package } from "lucide-react";
+import { MoreHorizontal, Pin, Eye, Pencil, Trash2, Package } from "lucide-react";
 import { StockBadge } from "./StockBadge";
 import { type ProductRow } from "@/lib/inventory.functions";
 import { supabaseThumb } from "@/lib/img";
@@ -22,7 +22,6 @@ interface Props {
   onAdjust: (id: string, delta: number) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
   onEdit: (p: ProductRow) => void;
-  onBuyMore: (p: ProductRow) => void;
   onDelete: (id: string) => void;
   relativeUpdated: string;
   /** Admin. Gates pin + the edit/buy-more/delete menu. Employees keep the read
@@ -36,7 +35,6 @@ export function InventoryCard({
   onAdjust,
   onTogglePin,
   onEdit,
-  onBuyMore,
   onDelete,
   relativeUpdated,
   canManage = false,
@@ -156,9 +154,10 @@ export function InventoryCard({
             <Eye className="size-3.5" />
             Details
           </button>
-          {/* Edit / Add Stock / Delete are the three product-and-stock writes.
-            The whole menu goes away for an employee — there is nothing left in
-            it they are allowed to do. */}
+          {/* Edit and Delete are the product writes that belong on a card.
+            Buying stock in is a purchase, not a card action, so it lives on the
+            page header and the product drawer. The whole menu goes away for an
+            employee — there is nothing left in it they are allowed to do. */}
           {canManage && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -170,9 +169,6 @@ export function InventoryCard({
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuItem onClick={() => onEdit(product)}>
                   <Pencil className="size-4" /> Edit Product
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onBuyMore(product)}>
-                  <Plus className="size-4" /> Buy More
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

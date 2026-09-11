@@ -31,13 +31,7 @@ function suggestSku(name: string): string {
  * not of the catalogue entry, and it is captured when stock is received.
  * Selling price IS here: it is the list price, and it prefills every sale line.
  */
-export function ProductForm({
-  initial,
-  categories,
-}: {
-  initial: ProductRow | null;
-  categories: string[];
-}) {
+export function ProductForm({ initial }: { initial: ProductRow | null }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const upsert = useServerFn(upsertProduct);
@@ -209,17 +203,11 @@ export function ProductForm({
 
                 <Field label="Model / Category">
                   <input
-                    list="product-categories"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     placeholder="e.g. Power Tools"
                     className={inputCls}
                   />
-                  <datalist id="product-categories">
-                    {categories.map((c) => (
-                      <option key={c} value={c} />
-                    ))}
-                  </datalist>
                 </Field>
               </div>
 

@@ -8,12 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { listAddonBatches, type AddonRow } from "@/lib/addons.functions";
 import { relativeTime } from "@/lib/relative-time";
 import { supabaseThumb } from "@/lib/img";
-
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
-});
+import { money } from "@/lib/money";
 
 /**
  * Stock history for one add-on: every batch received, what it cost, and how much
@@ -124,7 +119,7 @@ export function AddonStockDrawer({
                             <span className="text-muted-foreground"> / {b.quantity} left</span>
                           </span>
                           <span className="tabular-nums text-muted-foreground">
-                            {fmt.format(b.unit_cost)} / unit
+                            {money(b.unit_cost)} / unit
                           </span>
                         </div>
                         {/* how much of this lot is still on the shelf */}
@@ -140,7 +135,7 @@ export function AddonStockDrawer({
                         </div>
                         {used > 0 && (
                           <p className="mt-1.5 text-[11px] text-muted-foreground">
-                            {used} given away · {fmt.format(used * b.unit_cost)} off margin
+                            {used} given away · {money(used * b.unit_cost)} off margin
                           </p>
                         )}
                       </div>
@@ -157,11 +152,11 @@ export function AddonStockDrawer({
                 Totals
               </span>
               <dl className="flex flex-col gap-2 rounded-2xl bg-surface-muted p-4">
-                <Row label="Value on hand" value={fmt.format(addon.on_hand_value)} />
-                <Row label="Total spend" value={fmt.format(addon.total_spend)} muted />
+                <Row label="Value on hand" value={money(addon.on_hand_value)} />
+                <Row label="Total spend" value={money(addon.total_spend)} muted />
                 <Row
                   label="Off margin so far"
-                  value={fmt.format(addon.total_spend - addon.on_hand_value)}
+                  value={money(addon.total_spend - addon.on_hand_value)}
                   muted
                 />
               </dl>
