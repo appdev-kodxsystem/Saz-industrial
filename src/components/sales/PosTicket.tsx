@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { money } from "@/lib/money";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
@@ -23,6 +24,7 @@ import { supabaseThumb } from "@/lib/img";
 import { supabase } from "@/integrations/supabase/client";
 import { useOrg } from "@/hooks/use-org";
 import FileDrop from "@/components/ui/file-drop";
+import { TenderPad } from "./TenderPad";
 import {
   addonsPerUnit,
   distributePayment,
@@ -34,13 +36,6 @@ import {
   type TicketAddon,
   type TicketLine,
 } from "./ticket-context";
-
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
-});
-const money = (n: number) => fmt.format(n || 0);
 
 /**
  * The open ticket, always on screen beside the item picker.
@@ -60,9 +55,18 @@ export function PosTicket({
   const qc = useQueryClient();
   const submit = useServerFn(createSale);
   const { org } = useOrg();
-  const [showCustomer, setShowCustomer] = useState(false);
-  const [showReceipt, setShowReceipt] = useState(false);
+  // One panel at a time. The footer is the shortest part of a tall panel, and
+  // two open disclosures push the total and the Complete button down together —
+  // so opening one closes the other rather than stacking.
+  const [panel, setPanel] = useState<"customer" | "receipt" | null>(null);
+  const showCustomer = panel === "customer";
+  const showReceipt = panel === "receipt";
+  const togglePanel = (which: "customer" | "receipt") =>
+    setPanel((open) => (open === which ? null : which));
   const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  // Checkout is a step, not a button: the pad covers the ticket while the money
+  // is being counted, then hands back a completed sale.
+  const [taking, setTaking] = useState(false);
 
   // Object URLs are a leak if they are never revoked, and the preview is
   // replaced every time a different file is picked.
@@ -76,16 +80,16 @@ export function PosTicket({
     return () => URL.revokeObjectURL(url);
   }, [t.receipt]);
 
-  // The till no longer asks what was handed over: every sale rung up here is
-  // settled in full. `sales.net_payment` still exists and Pending Payments still
-  // reads it — a balance is now recorded from that page, not at checkout.
-  const applied = t.total;
+  // What was actually handed over is asked for at checkout again: the tender pad
+  // returns it, and anything short of the bill is written to `sales.net_payment`
+  // as a balance for Pending Payments to collect. Paid in full is just the case
+  // where that balance is zero.
   const profit = t.total - t.cost - t.addonCost;
 
   const priced = t.lines.every((l) => unitPricesOf(l).every((p) => p > 0));
 
   const sell = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (applied: number) => {
       // Prices and payment are resolved to per-unit numbers here, because that
       // is the shape `sales` records — one row per unit, each with its own
       // price and its own share of what was paid.
@@ -117,9 +121,12 @@ export function PosTicket({
         });
       }
 
+      // Spread what was paid across the units, so a part-paid sale leaves each
+      // row carrying its own share of the balance rather than one row paid and
+      // the rest untouched.
       const payments = distributePayment(
         flat.map((f) => f.selling_price),
-        applied,
+        Math.min(Math.max(applied, 0), t.total),
       );
 
       // Upload first: a sale that claims a receipt it does not have is worse
@@ -155,9 +162,14 @@ export function PosTicket({
         },
       });
     },
-    onSuccess: (res: any) => {
+    onSuccess: (res: any, applied: number) => {
       for (const key of [
         ["products"],
+        // The per-product lists of unsold units the picker hands out. Missing
+        // from here, they stayed cached for their full staleTime after a sale —
+        // so the units just sold were still offered, went back on a ticket, and
+        // the next checkout died on the server's "already sold" guard.
+        ["stock-units"],
         ["addons"],
         ["sales"],
         ["pending-payments"],
@@ -166,26 +178,59 @@ export function PosTicket({
       ]) {
         qc.invalidateQueries({ queryKey: key, refetchType: "active" });
       }
+      // A part-paid sale has to SAY it is part-paid: the ticket is cleared a
+      // moment later, and the balance would otherwise only be discoverable by
+      // going looking for it on Pending Payments.
+      const owed = Math.max(0, t.total - Math.min(applied, t.total));
       // The add-on step cannot fail the sale — the customer paid for the
       // machine, not the giveaway — so a problem there is surfaced separately.
       if (res?.addonWarning) toast.warning(`Sale recorded, but: ${res.addonWarning}`);
+      else if (owed > 0)
+        toast.success(`Sale recorded — ${money(t.total)}, ${money(owed)} still owed`);
       else toast.success(`Sale recorded — ${money(t.total)}`);
       t.clear();
-      setShowCustomer(false);
-      setShowReceipt(false);
+      setPanel(null);
+      setTaking(false);
       if (res?.orderId) onCompleted?.(res.orderId);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not record the sale"),
+    onError: (e) => {
+      // Another till (or another tab) got there first. Whatever this ticket
+      // thought was available is out of date, so re-read it before the operator
+      // tries again — otherwise the retry fails on the same stale unit.
+      const msg = e instanceof Error ? e.message : "Could not record the sale";
+      if (/already sold|not found/i.test(msg)) {
+        qc.invalidateQueries({ queryKey: ["stock-units"] });
+        qc.invalidateQueries({ queryKey: ["products"] });
+        toast.error("One of these units has just been sold elsewhere — re-add it and try again");
+        return;
+      }
+      toast.error(msg);
+    },
   });
 
   function complete() {
     if (!t.lines.length) return toast.error("Add an item to the ticket first");
     if (!priced) return toast.error("Every unit needs a price above zero");
-    sell.mutate();
+    setTaking(true);
   }
 
+  // F2 is the pay key on almost every till on a counter, so it is the pay key
+  // here too — without stealing the keystroke from someone typing a price.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "F2" || taking) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.isContentEditable) return;
+      e.preventDefault();
+      complete();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taking, t.lines.length, priced]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-surface ring-1 ring-hairline">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-surface ring-1 ring-hairline">
       <header className="flex shrink-0 items-center gap-2.5 border-b border-hairline bg-gradient-to-br from-primary/10 via-surface to-surface px-4 py-3.5">
         <span className="grid size-8 place-items-center rounded-xl bg-primary/15 text-primary">
           <Receipt className="size-4" />
@@ -212,105 +257,149 @@ export function PosTicket({
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {t.lines.length === 0 ? (
-          <div className="grid h-full min-h-40 place-items-center px-6 text-center">
-            <div>
-              <Receipt className="mx-auto mb-3 size-8 text-muted-foreground/40" />
-              <p className="text-sm font-medium">The ticket is empty</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Click any item on the left to add it. Set its price, quantity and any add-ons here.
-              </p>
+      {/* The list is the only part that scrolls, and it used to end by slicing
+          a line card in half against the footer. It now runs out under a short
+          fade, with enough bottom padding that the fade sits over empty space
+          when there is nothing more to see — so "there is more below" is shown
+          rather than implied by a severed card. */}
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full overflow-y-auto px-3 pb-8 pt-3">
+          {t.lines.length === 0 ? (
+            <div className="grid h-full min-h-40 place-items-center px-6 text-center">
+              <div>
+                <Receipt className="mx-auto mb-3 size-8 text-muted-foreground/40" />
+                <p className="text-sm font-medium">The ticket is empty</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Click any item on the left to add it. Set its price, quantity and any add-ons
+                  here.
+                </p>
+              </div>
             </div>
-          </div>
-        ) : (
-          <ul className="flex flex-col gap-2.5">
-            {t.lines.map((line) => (
-              <TicketLineCard key={line.productId} line={line} canSeeCost={canSeeCost} />
-            ))}
-          </ul>
-        )}
+          ) : (
+            <ul className="flex flex-col gap-2.5">
+              {t.lines.map((line) => (
+                <TicketLineCard key={line.productId} line={line} canSeeCost={canSeeCost} />
+              ))}
+            </ul>
+          )}
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-surface to-transparent"
+        />
       </div>
 
       <footer className="shrink-0 space-y-3 border-t border-hairline bg-background/95 p-3.5 backdrop-blur">
-        <button
-          type="button"
-          onClick={() => setShowCustomer((v) => !v)}
-          className="flex w-full items-center gap-2 rounded-xl bg-surface-muted px-3 py-2 text-left text-sm ring-1 ring-hairline transition hover:bg-secondary"
-        >
-          <User className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate">
-            {t.customerName.trim() || (
-              <span className="text-muted-foreground">Add customer (optional)</span>
-            )}
-          </span>
-          <ChevronDown
-            className={`size-4 shrink-0 text-muted-foreground transition-transform ${showCustomer ? "rotate-180" : ""}`}
-          />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setShowReceipt((v) => !v)}
-          className="flex w-full items-center gap-2 rounded-xl bg-surface-muted px-3 py-2 text-left text-sm ring-1 ring-hairline transition hover:bg-secondary"
-        >
-          <Paperclip className="size-4 shrink-0 text-muted-foreground" />
-          {/* A stable label, never the raw filename: "Screenshot 2026-09-07 at
-              3.22.34 PM.png" as a heading is unreadable, and the panel below
-              already shows the name, size and a thumbnail. */}
-          <span className="min-w-0 flex-1 truncate">
-            {t.receipt ? (
-              "Attachment"
-            ) : (
-              <span className="text-muted-foreground">Attach image (optional)</span>
-            )}
-          </span>
-          {t.receipt && (
-            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-              1 file
+        {/* Two disclosures, each one card: the trigger and the panel it opens
+            belong to the same box, so what is on screen always reads as the
+            thing you just clicked rather than a stray set of fields. */}
+        <div className="overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline">
+          <button
+            type="button"
+            onClick={() => togglePanel("customer")}
+            aria-expanded={showCustomer}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-secondary"
+          >
+            <User className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">
+              {t.customerName.trim() || (
+                <span className="text-muted-foreground">Add customer (optional)</span>
+              )}
             </span>
-          )}
-          <ChevronDown
-            className={`size-4 shrink-0 text-muted-foreground transition-transform ${showReceipt ? "rotate-180" : ""}`}
-          />
-        </button>
+            <ChevronDown
+              className={`size-4 shrink-0 text-muted-foreground transition-transform ${showCustomer ? "rotate-180" : ""}`}
+            />
+          </button>
 
-        {showReceipt && (
-          <FileDrop
-            file={t.receipt}
-            previewUrl={receiptPreview}
-            accept="image/*,application/pdf"
-            onChange={t.setReceipt}
-          />
-        )}
-
-        {showCustomer && (
-          <div className="space-y-2">
-            <input
-              value={t.customerName}
-              onChange={(e) => t.setCustomer({ name: e.target.value })}
-              placeholder="Customer name"
-              className="h-9 w-full rounded-lg bg-surface-muted px-3 text-sm outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
-            />
-            <input
-              value={t.customerContact}
-              onChange={(e) => t.setCustomer({ contact: e.target.value })}
-              placeholder="Phone or email"
-              className="h-9 w-full rounded-lg bg-surface-muted px-3 text-sm outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
-            />
-            <input
-              value={t.note}
-              onChange={(e) => t.setCustomer({ note: e.target.value })}
-              placeholder="Note (optional)"
-              className="h-9 w-full rounded-lg bg-surface-muted px-3 text-sm outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
-            />
+          {/* A 0fr→1fr grid row is the one way to transition to a height that
+              isn't known up front, so the panel slides instead of snapping.
+              `inert` keeps the collapsed fields out of tab order while they are
+              still in the DOM being animated. */}
+          <div
+            inert={!showCustomer}
+            className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+              showCustomer ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+            }`}
+          >
+            <div className="overflow-hidden">
+              <div className="space-y-2 border-t border-hairline p-2.5">
+                <input
+                  value={t.customerName}
+                  onChange={(e) => t.setCustomer({ name: e.target.value })}
+                  placeholder="Customer name"
+                  aria-label="Customer name"
+                  className="h-9 w-full rounded-lg bg-surface px-3 text-sm outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
+                />
+                <input
+                  value={t.customerContact}
+                  onChange={(e) => t.setCustomer({ contact: e.target.value })}
+                  placeholder="Phone or email"
+                  aria-label="Customer phone or email"
+                  className="h-9 w-full rounded-lg bg-surface px-3 text-sm outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
+                />
+                <input
+                  value={t.note}
+                  onChange={(e) => t.setCustomer({ note: e.target.value })}
+                  placeholder="Note (optional)"
+                  aria-label="Note about this sale"
+                  className="h-9 w-full rounded-lg bg-surface px-3 text-sm outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
+                />
+              </div>
+            </div>
           </div>
-        )}
+        </div>
+
+        <div className="overflow-hidden rounded-xl bg-surface-muted ring-1 ring-hairline">
+          <button
+            type="button"
+            onClick={() => togglePanel("receipt")}
+            aria-expanded={showReceipt}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-secondary"
+          >
+            <Paperclip className="size-4 shrink-0 text-muted-foreground" />
+            {/* A stable label, never the raw filename: "Screenshot 2026-09-07 at
+                3.22.34 PM.png" as a heading is unreadable, and the panel below
+                already shows the name, size and a thumbnail. */}
+            <span className="min-w-0 flex-1 truncate">
+              {t.receipt ? (
+                "Attachment"
+              ) : (
+                <span className="text-muted-foreground">Attach image (optional)</span>
+              )}
+            </span>
+            {t.receipt && (
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                1 file
+              </span>
+            )}
+            <ChevronDown
+              className={`size-4 shrink-0 text-muted-foreground transition-transform ${showReceipt ? "rotate-180" : ""}`}
+            />
+          </button>
+
+          <div
+            inert={!showReceipt}
+            className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+              showReceipt ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+            }`}
+          >
+            <div className="overflow-hidden">
+              <div className="border-t border-hairline p-2.5">
+                <FileDrop
+                  file={t.receipt}
+                  previewUrl={receiptPreview}
+                  accept="image/*,application/pdf"
+                  onChange={t.setReceipt}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div className="space-y-1.5 text-sm">
           <Row label="Subtotal" value={money(t.total)} />
           {canSeeCost && t.addonCost > 0 && (
-            <Row label="Add-ons given" value={`−${money(t.addonCost)} margin`} muted />
+            <Row label="Free add-ons" value={`−${money(t.addonCost)}`} muted />
           )}
           {canSeeCost && t.lines.length > 0 && (
             <Row label="Profit" value={money(profit)} tone={profit >= 0 ? "good" : "danger"} />
@@ -321,21 +410,39 @@ export function PosTicket({
           </div>
         </div>
 
+        {/* The button says what is about to happen AND for how much: at a
+            counter the total is read off the thing you are about to press. */}
         <button
           type="button"
           onClick={complete}
           disabled={sell.isPending || t.lines.length === 0 || !priced}
-          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition active:scale-[0.99] disabled:opacity-40"
+          className="inline-flex h-14 w-full items-center justify-between gap-2 rounded-xl bg-primary px-4 text-base font-semibold text-primary-foreground transition active:scale-[0.99] disabled:opacity-40"
         >
-          <Check className="size-4" />
-          {sell.isPending ? "Recording…" : "Complete sale"}
+          <span className="inline-flex items-center gap-2">
+            <Check className="size-5" />
+            Take payment
+          </span>
+          <span className="tabular-nums">{money(t.total)}</span>
         </button>
+        <p className="text-center text-[11px] text-muted-foreground">
+          <kbd className="rounded bg-surface-muted px-1 font-sans ring-1 ring-hairline">F2</kbd> to
+          take payment
+        </p>
         {t.lines.length > 0 && !priced && (
           <p className="text-center text-xs text-warning-foreground">
             Every unit needs a price above zero.
           </p>
         )}
       </footer>
+
+      {taking && (
+        <TenderPad
+          total={t.total}
+          busy={sell.isPending}
+          onCancel={() => setTaking(false)}
+          onConfirm={(paid) => sell.mutate(paid)}
+        />
+      )}
     </div>
   );
 }
@@ -355,6 +462,7 @@ function TicketLineCard({ line, canSeeCost }: { line: TicketLine; canSeeCost: bo
     queryKey: ["stock-units", line.productId],
     queryFn: () => fetchUnits({ data: { productId: line.productId } }),
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const addOne = () => {
@@ -386,30 +494,33 @@ function TicketLineCard({ line, canSeeCost }: { line: TicketLine; canSeeCost: bo
                 type="button"
                 onClick={() => t.removeUnit(line.productId)}
                 aria-label="One fewer"
-                className="grid size-7 place-items-center rounded-l-lg text-muted-foreground transition hover:bg-secondary"
+                className="grid size-9 place-items-center rounded-l-lg text-muted-foreground transition hover:bg-secondary active:scale-95"
               >
                 <Minus className="size-3.5" />
               </button>
-              <span className="min-w-7 text-center text-sm font-medium tabular-nums">{qty}</span>
+              <span className="min-w-9 text-center text-base font-semibold tabular-nums">
+                {qty}
+              </span>
               <button
                 type="button"
                 onClick={addOne}
                 aria-label="One more"
-                className="grid size-7 place-items-center rounded-r-lg text-muted-foreground transition hover:bg-secondary"
+                className="grid size-9 place-items-center rounded-r-lg text-muted-foreground transition hover:bg-secondary active:scale-95"
               >
                 <Plus className="size-3.5" />
               </button>
             </div>
 
             {!line.perUnit && (
-              <div className="inline-flex items-center gap-1">
-                <span className="text-[11px] text-muted-foreground">@</span>
+              <div className="inline-flex items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">Price each</span>
                 <input
                   inputMode="decimal"
                   value={line.price}
                   onChange={(e) => t.patchLine(line.productId, { price: e.target.value })}
                   placeholder="0"
-                  className="h-7 w-24 rounded-lg bg-surface px-2 text-right text-sm tabular-nums outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="h-9 w-28 rounded-lg bg-surface px-2.5 text-right text-base font-medium tabular-nums outline-none ring-1 ring-hairline focus:ring-2 focus:ring-primary/40"
                 />
               </div>
             )}
@@ -418,7 +529,7 @@ function TicketLineCard({ line, canSeeCost }: { line: TicketLine; canSeeCost: bo
               type="button"
               onClick={() => t.removeLine(line.productId)}
               aria-label={`Remove ${line.name}`}
-              className="ml-auto grid size-7 place-items-center rounded-lg text-muted-foreground transition hover:bg-danger/10 hover:text-danger-foreground"
+              className="ml-auto grid size-9 place-items-center rounded-lg text-muted-foreground transition hover:bg-danger/10 hover:text-danger-foreground"
             >
               <Trash2 className="size-3.5" />
             </button>
@@ -468,7 +579,7 @@ function TicketLineCard({ line, canSeeCost }: { line: TicketLine; canSeeCost: bo
         </button>
         {canSeeCost && addonCost > 0 && (
           <span className="ml-auto text-[11px] text-muted-foreground">
-            −{money(addonCost)} margin
+            Add-ons cost {money(addonCost)}
           </span>
         )}
       </div>

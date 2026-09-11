@@ -8,12 +8,7 @@ import { Check, Search, X } from "lucide-react";
 import { getAvailableStockItems, listProducts, type ProductRow } from "@/lib/inventory.functions";
 import { supabaseThumb } from "@/lib/img";
 import { useTicket } from "./ticket-context";
-
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
-});
+import { money } from "@/lib/money";
 
 /**
  * What you sell from.
@@ -155,6 +150,9 @@ export function ItemPicker() {
           <span className="text-muted-foreground/40">·</span>
           <kbd className="rounded bg-surface-muted px-1 font-sans ring-1 ring-hairline">Enter</kbd>
           to add a scanned or exact SKU match
+          <span className="text-muted-foreground/40">·</span>
+          <kbd className="rounded bg-surface-muted px-1 font-sans ring-1 ring-hairline">F2</kbd>
+          to take payment
           {query.trim().length > 0 && filtered.length > 0 && (
             <>
               <span className="text-muted-foreground/40">·</span>
@@ -180,9 +178,9 @@ export function ItemPicker() {
       )}
 
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 sm:grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="h-40 animate-pulse rounded-2xl bg-surface" />
+            <div key={i} className="h-56 animate-pulse rounded-2xl bg-surface" />
           ))}
         </div>
       ) : filtered.length === 0 ? (
@@ -190,7 +188,7 @@ export function ItemPicker() {
           {products.length === 0 ? "Nothing in the catalogue yet." : `Nothing matches “${query}”.`}
         </p>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 sm:grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
           {filtered.map((p) => (
             <ItemTile key={p.id} product={p} onTicket={t.qtyFor(p.id)} />
           ))}
@@ -210,6 +208,9 @@ function ItemTile({ product, onTicket }: { product: ProductRow; onTicket: number
     queryKey: ["stock-units", product.id],
     queryFn: () => fetchUnits({ data: { productId: product.id } }),
     staleTime: 30_000,
+    // Coming back to the till is exactly when another terminal may have sold
+    // something out from under this list.
+    refetchOnWindowFocus: true,
     enabled: product.stock > 0,
   });
 
@@ -244,11 +245,11 @@ function ItemTile({ product, onTicket }: { product: ProductRow; onTicket: number
         onTicket > 0 ? "ring-2 ring-primary/50" : "ring-hairline hover:ring-foreground/10"
       }`}
     >
-      <div className="relative aspect-square w-full bg-surface-muted">
+      <div className="relative aspect-[4/3] w-full bg-surface-muted">
         {thumb ? (
           <img src={thumb} alt="" loading="lazy" className="size-full object-cover" />
         ) : (
-          <span className="grid size-full place-items-center text-2xl font-semibold text-muted-foreground/50">
+          <span className="grid size-full place-items-center text-3xl font-semibold text-muted-foreground/50">
             {product.name.slice(0, 2).toUpperCase()}
           </span>
         )}
@@ -273,11 +274,15 @@ function ItemTile({ product, onTicket }: { product: ProductRow; onTicket: number
         </span>
       </div>
 
-      <div className="flex min-w-0 flex-col gap-0.5 p-2.5">
-        <span className="truncate text-sm font-medium leading-tight">{product.name}</span>
-        <span className="truncate text-[11px] text-muted-foreground">{product.sku}</span>
-        <span className="mt-0.5 text-sm font-semibold tabular-nums">
-          {fmt.format(Number(product.selling_price) || 0)}
+      {/* Wide tiles have room to put the price beside the name rather than under
+          it, which keeps every card the same height however long a name runs. */}
+      <div className="flex min-w-0 items-end justify-between gap-2 p-3">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="truncate text-sm font-medium leading-tight">{product.name}</span>
+          <span className="truncate text-[11px] text-muted-foreground">{product.sku}</span>
+        </span>
+        <span className="shrink-0 text-sm font-semibold tabular-nums">
+          {money(Number(product.selling_price) || 0)}
         </span>
       </div>
     </button>

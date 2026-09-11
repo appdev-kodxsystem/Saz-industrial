@@ -3,8 +3,7 @@ import { type ProductRow } from "@/lib/inventory.functions";
 import { stockStatusOf } from "./InventoryCard";
 import { StockBadge } from "./StockBadge";
 import { TrendingUp, Package } from "lucide-react";
-
-const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "PKR" });
+import { moneyExact } from "@/lib/money";
 
 export function ProductDrawer({
   product,
@@ -70,15 +69,15 @@ export function ProductDrawer({
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-hairline ring-1 ring-hairline">
             <Stat label="Stock" value={`${product.stock} units`} />
             <Stat label="Reorder at" value={`${product.reorder_at}`} />
-            {canSeeCost && <Stat label="Purchase" value={fmt.format(buy)} />}
-            <Stat label="Selling" value={fmt.format(sell)} />
+            {canSeeCost && <Stat label="Purchase" value={moneyExact(buy)} />}
+            <Stat label="Selling" value={moneyExact(sell)} />
           </div>
 
           {canSeeCost && (
             <Section icon={<TrendingUp className="size-4" />} title="Profit">
               <div className="grid grid-cols-2 gap-3">
                 <MetricBox label="Margin" value={`${margin.toFixed(1)}%`} />
-                <MetricBox label="Per unit" value={fmt.format(sell - buy)} />
+                <MetricBox label="Per unit" value={moneyExact(sell - buy)} />
               </div>
             </Section>
           )}

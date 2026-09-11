@@ -33,6 +33,18 @@ const PRESETS: { id: PeriodId; label: string }[] = [
   { id: "all", label: "All" },
 ];
 
+/**
+ * Which presets a page offers.
+ *
+ * A ledger answers "show me these rows", and "everything outstanding" is a real
+ * question there — Pending Payments opens on it. A trend chart answers "how are
+ * we doing over time", where unbounded history has no fixed bucket size and
+ * nothing to compare itself against, so Reports takes the rolling 12 months in
+ * its place. Neither page wants the other's option.
+ */
+export const LEDGER_PRESETS: PeriodId[] = ["day", "week", "month", "year", "all"];
+export const TREND_PRESETS: PeriodId[] = ["day", "week", "month", "year"];
+
 export function startOfDay(d: Date) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -61,7 +73,12 @@ export function presetRange(period: Exclude<PeriodId, "custom">): DateRange {
   if (period === "month") {
     return { from: new Date(start.getFullYear(), start.getMonth(), 1).getTime(), to };
   }
-  return { from: new Date(start.getFullYear(), 0, 1).getTime(), to };
+  // Year is the last twelve months, not the calendar year to date. On the 3rd
+  // of January, "this year" is three days — a window that answers nothing and
+  // compares against a full year. Whole months, not 365 days: this reads as
+  // twelve monthly bars, and starting mid-month would leave the first and last
+  // bars half the height of the rest for a reason no reader could see.
+  return { from: new Date(start.getFullYear(), start.getMonth() - 11, 1).getTime(), to };
 }
 
 const dayLabel = (ms: number) =>
@@ -82,11 +99,14 @@ export function DateFilter({
   period,
   range,
   onChange,
+  presets = LEDGER_PRESETS,
   className = "",
 }: {
   period: PeriodId;
   range: DateRange;
   onChange: (period: PeriodId, range: DateRange) => void;
+  /** Defaults to the ledger set; pass TREND_PRESETS on a chart page. */
+  presets?: PeriodId[];
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -140,7 +160,7 @@ export function DateFilter({
 
   return (
     <div className={`-mx-1 flex flex-wrap items-center gap-2 px-1 ${className}`}>
-      {PRESETS.map((p) => (
+      {PRESETS.filter((p) => presets.includes(p.id)).map((p) => (
         <button
           key={p.id}
           type="button"

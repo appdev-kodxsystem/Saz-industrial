@@ -10,6 +10,12 @@ import { relativeTime } from "@/lib/relative-time";
  * each growing their own. What differs between them is only the columns, which
  * is what the caller supplies.
  *
+ * On a wide screen it lays out at its NATURAL width and scrolls sideways inside
+ * its card if that is wider than the space it was given. Sales renders this in
+ * half a screen beside the till, and forcing seven columns into that space wraps
+ * "Sep 11, 2026" down four lines and breaks a figure across two — a table that
+ * has to be deciphered is worse than one that has to be scrolled.
+ *
  * Below `md` the table becomes cards: the first two columns form the card
  * header (they are always [date, subject]) and the rest become label/value
  * rows. A ledger row has six or seven columns, and none of them survive being
@@ -40,13 +46,15 @@ export function TransactionTable<T extends { id: string }>({
   return (
     <>
       <div className="hidden overflow-x-auto rounded-2xl bg-surface ring-1 ring-hairline md:block">
-        <table className="w-full text-sm">
+        <table className="w-max min-w-full text-sm">
           <thead>
             <tr className="border-b border-hairline text-left text-xs text-muted-foreground">
               {columns.map((c) => (
                 <th
                   key={c.header}
-                  className={`px-4 py-3 font-medium ${c.align === "right" ? "text-right" : ""} ${c.className ?? ""}`}
+                  className={`whitespace-nowrap px-4 py-3 font-medium ${
+                    c.align === "right" ? "text-right" : ""
+                  } ${c.className ?? ""}`}
                 >
                   {c.header}
                 </th>
@@ -65,7 +73,9 @@ export function TransactionTable<T extends { id: string }>({
                 {columns.map((c) => (
                   <td
                     key={c.header}
-                    className={`px-4 py-3 tabular-nums ${c.align === "right" ? "text-right" : ""} ${c.className ?? ""}`}
+                    className={`whitespace-nowrap px-4 py-3 tabular-nums ${
+                      c.align === "right" ? "text-right" : ""
+                    } ${c.className ?? ""}`}
                   >
                     {c.render(r)}
                   </td>
@@ -106,15 +116,9 @@ export function TransactionTable<T extends { id: string }>({
   );
 }
 
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 2,
-});
-
-export function money(n: number) {
-  return fmt.format(n || 0);
-}
+// Re-exported so the ledger pages that already import `money` from here keep
+// working, while there is only one implementation of it in the app.
+export { moneyExact as money } from "@/lib/money";
 
 export function DateCell({ iso }: { iso: string }) {
   const d = new Date(iso);
@@ -146,13 +150,11 @@ export function Kpi({
           ? "text-warning-foreground"
           : "text-foreground";
   return (
-    <div className="flex flex-col gap-1 rounded-2xl bg-surface p-4 ring-1 ring-hairline sm:p-5">
+    <div className="flex flex-col gap-0.5 rounded-xl bg-surface px-4 py-3 ring-1 ring-hairline">
       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <span
-        className={`text-xl font-semibold tracking-tight sm:text-2xl tabular-nums ${valueTone}`}
-      >
+      <span className={`text-lg font-semibold tracking-tight tabular-nums ${valueTone}`}>
         {value}
       </span>
     </div>
@@ -160,17 +162,15 @@ export function Kpi({
 }
 
 export function KpiRow({ children }: { children: React.ReactNode }) {
-  // Container query, not `lg:`. The ticket dock takes 380px off the content
-  // column when it opens, and a viewport breakpoint cannot see that — so at
-  // `lg:grid-cols-4` the tiles stayed four-across and squeezed, wrapping their
-  // own labels and truncating values. Measuring the actual column instead lets
-  // them drop a column and keep their size.
+  // Tracks come from the row's own width rather than a breakpoint of any kind:
+  // these sit in a full-width page on Purchases and in half of one beside the
+  // till on Sales, and a fixed column count turns the narrow case into a 2×2 of
+  // tall boxes with nothing in them. A figure and its label need about 160px —
+  // past that, more tiles fit on the line instead of each one growing taller.
   return (
-    <div className="@container mb-8">
-      <section className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @4xl:grid-cols-4 sm:gap-4">
-        {children}
-      </section>
-    </div>
+    <section className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5">
+      {children}
+    </section>
   );
 }
 

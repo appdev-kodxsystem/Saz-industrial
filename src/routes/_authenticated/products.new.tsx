@@ -1,8 +1,4 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
-import { listProducts } from "@/lib/inventory.functions";
 import { ProductForm } from "@/components/inventory/ProductForm";
 
 export const Route = createFileRoute("/_authenticated/products/new")({
@@ -16,14 +12,5 @@ export const Route = createFileRoute("/_authenticated/products/new")({
 });
 
 function NewProductPage() {
-  const list = useServerFn(listProducts);
-  // Only for the category suggestions. Shares the cache with the Inventory page,
-  // so arriving from there costs nothing.
-  const { data: products = [] } = useQuery({ queryKey: ["products"], queryFn: () => list() });
-  const categories = useMemo(
-    () => Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort(),
-    [products],
-  );
-
-  return <ProductForm initial={null} categories={categories} />;
+  return <ProductForm initial={null} />;
 }

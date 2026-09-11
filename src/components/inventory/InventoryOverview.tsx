@@ -1,15 +1,10 @@
 "use client";
 
-import { Boxes, Gift, Layers, PackageX, TrendingUp, TriangleAlert, Wallet } from "lucide-react";
+import { Boxes, Gift, Layers, TrendingUp, Wallet } from "lucide-react";
 import type { ProductRow } from "@/lib/inventory.functions";
 import type { AddonRow } from "@/lib/addons.functions";
-import { stockStatusOf } from "./InventoryCard";
+import { money } from "@/lib/money";
 
-const money = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
-});
 const count = new Intl.NumberFormat("en-US");
 
 /**
@@ -21,13 +16,20 @@ const count = new Intl.NumberFormat("en-US");
  * are always asked together:
  *
  *   what is on the shelf — how many products, how many physical units
- *   what it is worth     — at cost, at retail, and the margin between them
+ *   what it is worth     — what it cost to buy in, and what it lists for
+ *
+ * Eight identical tiles gave all eight numbers the same weight, so none of them
+ * read as the answer. This is one panel with a shape instead: the single figure
+ * that matters set large, and the supporting counts beside it in a quieter row.
  *
  * Add-ons are counted too. They are bought, they sit on a shelf and they tie up
  * money exactly like machinery does; leaving them out understated the holding
- * by however much had been spent on giveaways.
+ * by however much had been spent on giveaways. They are given away rather than
+ * sold, though, so they carry cost but no retail value — which is why the two
+ * figures are left side by side to be compared rather than subtracted into a
+ * single "margin" that reads as a loss on a shelf full of giveaways.
  *
- * Cost and margin are admin-only, the same rule as Purchases and Reports.
+ * Cost figures are admin-only, the same rule as Purchases and Reports.
  */
 export function InventoryOverview({
   products,
@@ -41,168 +43,118 @@ export function InventoryOverview({
   const units = products.reduce((n, p) => n + p.stock, 0);
   const costValue = products.reduce((n, p) => n + p.stock * Number(p.purchase_price), 0);
   const retailValue = products.reduce((n, p) => n + p.stock * Number(p.selling_price), 0);
-  const low = products.filter((p) => stockStatusOf(p) === "low_stock").length;
-  const out = products.filter((p) => stockStatusOf(p) === "out_of_stock").length;
 
   const addonUnits = addons.reduce((n, a) => n + (a.on_hand ?? 0), 0);
   const addonValue = addons.reduce((n, a) => n + (a.on_hand_value ?? 0), 0);
 
   const totalUnits = units + addonUnits;
   const totalCost = costValue + addonValue;
-  // Add-ons are given away, never sold, so they add nothing to retail — but
-  // their cost still comes out of the margin they help earn.
-  const potentialProfit = retailValue - totalCost;
-  const margin = retailValue > 0 ? (potentialProfit / retailValue) * 100 : 0;
 
   return (
-    <section className="@container mb-8 flex flex-col gap-3 sm:gap-4">
-      <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @4xl:grid-cols-4 sm:gap-4">
-        <Stat
-          icon={<Layers className="size-4" />}
-          label="Products"
-          value={count.format(products.length)}
-          hint={`${count.format(addons.length)} add-on${addons.length === 1 ? "" : "s"}`}
-        />
-        <Stat
-          icon={<Boxes className="size-4" />}
-          label="Items In Stock"
-          value={count.format(totalUnits)}
-          hint={
-            addonUnits > 0
-              ? `${count.format(units)} machinery · ${count.format(addonUnits)} add-on`
-              : "physical units on hand"
-          }
-        />
-        {canSeeCost ? (
-          <>
-            <Stat
-              icon={<Wallet className="size-4" />}
-              label="Stock Value (cost)"
-              value={money.format(totalCost)}
-              hint="what it cost to buy in"
-            />
-            <Stat
-              icon={<TrendingUp className="size-4" />}
-              label="Retail Value"
-              value={money.format(retailValue)}
-              hint={`${money.format(potentialProfit)} margin · ${margin.toFixed(1)}%`}
-              tone="good"
-            />
-          </>
-        ) : (
-          <>
-            <Stat
-              icon={<TriangleAlert className="size-4" />}
-              label="Low Stock"
-              value={count.format(low)}
-              tone={low > 0 ? "warning" : undefined}
-            />
-            <Stat
-              icon={<PackageX className="size-4" />}
-              label="Out Of Stock"
-              value={count.format(out)}
-              tone={out > 0 ? "danger" : undefined}
-            />
-          </>
-        )}
-      </div>
+    <section className="@container mb-8">
+      <div className="overflow-hidden rounded-3xl bg-surface ring-1 ring-hairline">
+        <div className="flex flex-col gap-6 p-5 @3xl:flex-row @3xl:items-center @3xl:gap-8 sm:p-6">
+          {/* The headline. One number, set big, with the comparison it is always
+              read against directly underneath it. */}
+          <div className="min-w-0 @3xl:w-[34%] @3xl:shrink-0">
+            <div className="flex items-center gap-2.5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                {canSeeCost ? <Wallet className="size-4.5" /> : <Boxes className="size-4.5" />}
+              </span>
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                {canSeeCost ? "Stock value at cost" : "Items in stock"}
+              </span>
+            </div>
+            <p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums sm:text-4xl">
+              {canSeeCost ? money(totalCost) : count.format(totalUnits)}
+            </p>
+            {canSeeCost ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                what every unit on the shelf cost to buy in
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                across {count.format(products.length)} product
+                {products.length === 1 ? "" : "s"} on the shelf
+              </p>
+            )}
+          </div>
 
-      {/* Second row: the things that need acting on, and the add-on holding.
-          Employees already have the shortage counts above, so this is the
-          admin's follow-up detail rather than a repeat. */}
-      {canSeeCost && (
-        <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @4xl:grid-cols-4 sm:gap-4">
-          <Mini
-            icon={<TriangleAlert className="size-3.5" />}
-            label="Low stock"
-            value={`${count.format(low)} product${low === 1 ? "" : "s"}`}
-            tone={low > 0 ? "warning" : undefined}
-          />
-          <Mini
-            icon={<PackageX className="size-3.5" />}
-            label="Out of stock"
-            value={`${count.format(out)} product${out === 1 ? "" : "s"}`}
-            tone={out > 0 ? "danger" : undefined}
-          />
-          <Mini
-            icon={<Gift className="size-3.5" />}
-            label="Add-ons held"
-            value={`${count.format(addonUnits)} · ${money.format(addonValue)}`}
-          />
-          <Mini
-            icon={<Wallet className="size-3.5" />}
-            label="Avg cost / unit"
-            value={money.format(totalUnits ? totalCost / totalUnits : 0)}
-          />
+          {/* The supporting counts. Hairline-separated cells rather than eight
+              more boxes: same information, one border instead of four. */}
+          <dl className="grid flex-1 grid-cols-2 gap-px overflow-hidden rounded-2xl bg-hairline ring-1 ring-hairline @xl:grid-cols-4">
+            <Fact
+              icon={<Layers className="size-3.5" />}
+              label="Products"
+              value={count.format(products.length)}
+              hint={`${count.format(addons.length)} add-on${addons.length === 1 ? "" : "s"}`}
+            />
+            <Fact
+              icon={<Boxes className="size-3.5" />}
+              label="Units held"
+              value={count.format(totalUnits)}
+              hint={
+                addonUnits > 0
+                  ? `${count.format(units)} machinery · ${count.format(addonUnits)} add-on`
+                  : "physical units"
+              }
+            />
+            {canSeeCost ? (
+              <>
+                <Fact
+                  icon={<TrendingUp className="size-3.5" />}
+                  label="Retail value"
+                  value={money(retailValue)}
+                  hint="if every unit sells at its list price"
+                />
+                <Fact
+                  icon={<Wallet className="size-3.5" />}
+                  label="Avg cost / unit"
+                  value={money(totalUnits ? totalCost / totalUnits : 0)}
+                  hint="across everything held"
+                />
+              </>
+            ) : (
+              <>
+                <Fact
+                  icon={<Gift className="size-3.5" />}
+                  label="Add-ons held"
+                  value={count.format(addonUnits)}
+                />
+                <Fact
+                  icon={<Boxes className="size-3.5" />}
+                  label="Machinery"
+                  value={count.format(units)}
+                  hint="sellable units"
+                />
+              </>
+            )}
+          </dl>
         </div>
-      )}
+      </div>
     </section>
   );
 }
 
-function Stat({
+function Fact({
   icon,
   label,
   value,
   hint,
-  tone,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   hint?: string;
-  tone?: "good" | "warning" | "danger";
 }) {
-  const valueTone =
-    tone === "good"
-      ? "text-success-foreground"
-      : tone === "warning"
-        ? "text-warning-foreground"
-        : tone === "danger"
-          ? "text-danger-foreground"
-          : "text-foreground";
   return (
-    <div className="flex flex-col gap-1 rounded-2xl bg-surface p-4 ring-1 ring-hairline sm:p-5">
-      <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="flex flex-col gap-0.5 bg-surface p-3.5">
+      <dt className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         <span className="text-muted-foreground/70">{icon}</span>
         {label}
-      </span>
-      <span
-        className={`text-xl font-semibold tracking-tight tabular-nums sm:text-2xl ${valueTone}`}
-      >
-        {value}
-      </span>
-      {hint && <span className="truncate text-[11px] text-muted-foreground">{hint}</span>}
-    </div>
-  );
-}
-
-function Mini({
-  icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  tone?: "warning" | "danger";
-}) {
-  const valueTone =
-    tone === "warning"
-      ? "text-warning-foreground"
-      : tone === "danger"
-        ? "text-danger-foreground"
-        : "text-foreground";
-  return (
-    <div className="flex items-center gap-2.5 rounded-xl bg-surface px-3 py-2.5 ring-1 ring-hairline">
-      <span className="shrink-0 text-muted-foreground/70">{icon}</span>
-      <div className="min-w-0">
-        <p className="truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          {label}
-        </p>
-        <p className={`truncate text-sm font-semibold tabular-nums ${valueTone}`}>{value}</p>
-      </div>
+      </dt>
+      <dd className="truncate text-lg font-semibold tracking-tight tabular-nums">{value}</dd>
+      {hint && <dd className="truncate text-[11px] text-muted-foreground">{hint}</dd>}
     </div>
   );
 }

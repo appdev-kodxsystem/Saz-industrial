@@ -6,10 +6,12 @@ import { toast } from "sonner";
 import { Gift, PackagePlus, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { listAddons, deleteAddon as deleteAddonFn, type AddonRow } from "@/lib/addons.functions";
 import { PageHeader, PageBody } from "@/components/inventory/AppShell";
+import { Kpi, KpiRow } from "@/components/inventory/TransactionTable";
 import { AddonStockDrawer } from "@/components/addons/AddonStockDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { supabaseThumb } from "@/lib/img";
 import { useOrg } from "@/hooks/use-org";
+import { money } from "@/lib/money";
 
 export const Route = createFileRoute("/_authenticated/addons/")({
   head: () => ({
@@ -25,12 +27,6 @@ export const Route = createFileRoute("/_authenticated/addons/")({
   // to know what they can promise at the counter — they just never see cost,
   // which the server strips from their payload.
   component: AddonsPage,
-});
-
-const fmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "PKR",
-  maximumFractionDigits: 0,
 });
 
 type StockFilter = "all" | "in_stock" | "low_stock" | "out_of_stock";
@@ -183,12 +179,12 @@ function AddonsPage() {
       </PageHeader>
 
       <PageBody>
-        <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <KpiRow>
           <Kpi label="Add-ons" value={String(kpis.total)} />
           <Kpi label="Units On Hand" value={String(kpis.onHand)} />
           <Kpi label="Needs Restock" value={String(kpis.low)} tone="warning" />
-          {canManage && <Kpi label="Value On Hand" value={fmt.format(kpis.value)} />}
-        </section>
+          {canManage && <Kpi label="Value On Hand" value={money(kpis.value)} />}
+        </KpiRow>
 
         {error ? (
           <div className="rounded-2xl bg-surface p-10 text-center ring-1 ring-hairline">
@@ -337,8 +333,8 @@ function AddonRowCard({
       <div className="flex shrink-0 items-center gap-4 sm:gap-6">
         <Stat label="On hand" value={String(a.on_hand)} badge={tone} />
         <Stat label="Given away" value={String(a.given_away)} />
-        {canManage && <Stat label="Unit cost" value={fmt.format(a.unit_cost)} />}
-        <Stat label="Worth" value={fmt.format(a.list_value)} muted />
+        {canManage && <Stat label="Unit cost" value={money(a.unit_cost)} />}
+        <Stat label="Worth" value={money(a.list_value)} muted />
 
         {canManage && (
           <div className="flex items-center gap-1">
@@ -431,34 +427,5 @@ function Chip({
     >
       {children}
     </button>
-  );
-}
-
-function Kpi({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "warning" | "danger";
-}) {
-  const valueTone =
-    tone === "warning"
-      ? "text-warning-foreground"
-      : tone === "danger"
-        ? "text-danger-foreground"
-        : "text-foreground";
-  return (
-    <div className="flex flex-col gap-1 rounded-2xl bg-surface p-4 ring-1 ring-hairline sm:p-5">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <span
-        className={`text-xl font-semibold tracking-tight tabular-nums sm:text-2xl ${valueTone}`}
-      >
-        {value}
-      </span>
-    </div>
   );
 }
